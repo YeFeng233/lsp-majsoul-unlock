@@ -28,7 +28,8 @@
         <provider
             android:name=".manager.AiEndpointProvider"
             android:authorities="com.yefeng.majmax.hookprobe.ai"
-            android:exported="true" />
+            android:exported="true"
+            android:grantUriPermissions="true" />
         <service
             android:name=".manager.AiOverlayService"
             android:exported="false"

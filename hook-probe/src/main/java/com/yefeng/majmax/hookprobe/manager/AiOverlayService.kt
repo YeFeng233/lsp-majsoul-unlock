@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -42,6 +43,7 @@ class AiOverlayService : Service() {
         private const val LIVE = "local-ai.LIVE"
         private const val DEMO = "local-ai.DEMO"
         private const val STOP = "local-ai.STOP"
+        private val ENDPOINT_URI = Uri.parse("content://com.yefeng.majmax.hookprobe.ai/capture")
         @Volatile private var advertisedEndpoint: CaptureEndpoint? = null
 
         internal fun currentEndpoint(): CaptureEndpoint? = advertisedEndpoint?.let {
@@ -96,6 +98,9 @@ class AiOverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) { stopSelf(); return START_NOT_STICKY }
         demoMode.set(intent?.action == DEMO)
+        runCatching {
+            grantUriPermission(GAME, ENDPOINT_URI, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
         // A mode change has its own generation. Previously queued results may
         // never overwrite the self-test label or a new live session.
         reset(if (demoMode.get()) "正在加载本地模型自检…" else "等待游戏连接，请先开启助手再进入牌局")
@@ -230,6 +235,7 @@ class AiOverlayService : Service() {
         queue.clear()
         main.removeCallbacksAndMessages(null)
         overlay?.close()
+        runCatching { revokeUriPermission(ENDPOINT_URI, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         AiStatus.mutable.value = AiServiceStatus()
         super.onDestroy()
     }
