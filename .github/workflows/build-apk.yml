@@ -2,9 +2,12 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -59,7 +62,7 @@ jobs:
             -o hook-probe/build/native-libs/arm64-v8a/libmajsoulprobe.so
 
       - name: Build APK
-        run: ./gradlew -p hook-probe --no-daemon assembleDebug
+        run: ./gradlew -p hook-probe --no-daemon -PupdateOwner=YeFeng233 -PupdateRepo=lsp-majsoul-unlock -PupdateChannel=stable assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -68,3 +71,38 @@ jobs:
           path: hook-probe/build/outputs/apk/debug/MajsoulHookProbe-debug.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Prepare GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          APK="hook-probe/build/outputs/apk/debug/MajsoulHookProbe-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          BADGING="$($AAPT dump badging "$APK")"
+          VERSION_CODE="$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+          VERSION_NAME="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+          test -n "$VERSION_CODE" && test -n "$VERSION_NAME"
+          RELEASE_APK="MajsoulMax-Hook-${VERSION_NAME}-arm64-v8a.apk"
+          cp "$APK" "$RELEASE_APK"
+          cat > hook-update.json <<EOF
+          {
+            "schemaVersion": 1,
+            "applicationId": "com.yefeng.majmax.hookprobe",
+            "channel": "stable",
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "minSdk": 29,
+            "abis": ["arm64-v8a"],
+            "releaseTag": "${GITHUB_REF_NAME}",
+            "assetName": "${RELEASE_APK}"
+          }
+          EOF
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            hook-update.json
+            MajsoulMax-Hook-*-arm64-v8a.apk

@@ -6,9 +6,9 @@
 
 `hook-probe` 现在同时包含一个独立的管理应用入口。桌面启动后可在“概览、日志、更新”三个页面之间切换，并使用同一份雀魂 Max 图标。管理应用运行在自己的进程，不能把它的本地日志当作游戏进程已生效的证据；游戏内 MOD 选项仍在“设置 → MOD设置”中调整。
 
-更新页使用构建时的 `updateOwner`、`updateRepo` 和 `updateChannel` Gradle 属性生成 `UPDATE_OWNER`、`UPDATE_REPO` 和 `UPDATE_CHANNEL`。当前这些值为空，因此页面显示“尚未配置新仓库”，不会请求本仓库或旧代理应用的 release。新仓库确定后，在新应用工程的正式构建配置中填入地址并接入 GitHub Releases 协议。独立应用的界面与发布计划见 [`docs/HOOK_MANAGER_UI_DESIGN.md`](../docs/HOOK_MANAGER_UI_DESIGN.md)。
+更新页使用构建时的 `updateOwner`、`updateRepo` 和 `updateChannel` Gradle 属性生成 `UPDATE_OWNER`、`UPDATE_REPO` 和 `UPDATE_CHANNEL`。默认更新源已配置为 `YeFeng233/lsp-majsoul-unlock` 的 GitHub Releases，应用启动时自动检查一次，更新页也提供手动检查按钮。正式发布使用 `v*` 标签，并随 APK 发布 `hook-update.json` 元数据；检查只接受非草稿、非预发布的稳定 Release。独立应用的界面与发布计划见 [`docs/HOOK_MANAGER_UI_DESIGN.md`](../docs/HOOK_MANAGER_UI_DESIGN.md)。
 
-本阶段已完成管理应用外壳、图标资源、主题、导航、概览状态空态、管理侧日志搜索与级别筛选，以及更新源未配置状态。游戏侧结构化诊断文件、root 只读适配器和真实新仓库更新请求按设计文档的后续阶段实现；不会为了让页面显示绿色状态而伪造游戏进程事件。
+本阶段已完成管理应用外壳、图标资源、主题、导航、概览状态空态、管理侧日志搜索与级别筛选，以及 GitHub Releases 手动和启动自动更新检查。游戏侧结构化诊断文件、root 只读适配器仍按设计文档的后续阶段实现；不会为了让页面显示绿色状态而伪造游戏进程事件。
 
 当前实现已在 Android 17 ARM64、LSPosed IT 2.2.0-it (7888)、游戏 `4.0.16_MC` / 222 上实测。登录到大厅时已观察到双向字节数组替换，游戏公告中显示 `雀魂Max-rs载入成功` / `0.7.0`。房间、观战和完整对局流程尚未覆盖。
 

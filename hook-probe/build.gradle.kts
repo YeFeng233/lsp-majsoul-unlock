@@ -6,8 +6,8 @@ plugins {
 
 val upstreamDir = rootProject.projectDir.resolve("../external/MajsoulMax-rs")
 val stagedAssets = layout.buildDirectory.dir("generated/upstreamAssets")
-val updateOwner = providers.gradleProperty("updateOwner").orElse("").get()
-val updateRepo = providers.gradleProperty("updateRepo").orElse("").get()
+val updateOwner = providers.gradleProperty("updateOwner").orElse("YeFeng233").get()
+val updateRepo = providers.gradleProperty("updateRepo").orElse("lsp-majsoul-unlock").get()
 val updateChannel = providers.gradleProperty("updateChannel").orElse("stable").get()
 val stageUpstreamAssets by tasks.registering(Copy::class) {
     from(upstreamDir.resolve("liqi_config")) {
@@ -26,8 +26,8 @@ android {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.4.3"
+        versionCode = 8
+        versionName = "0.4.4"
         buildConfigField("String", "UPDATE_OWNER", "\"${updateOwner.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_CHANNEL", "\"${updateChannel.replace("\"", "\\\"")}\"")

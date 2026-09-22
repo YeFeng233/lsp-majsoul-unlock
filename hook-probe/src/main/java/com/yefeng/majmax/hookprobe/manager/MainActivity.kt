@@ -49,6 +49,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -147,6 +148,18 @@ private fun HookManagerApp() {
     val context = LocalContext.current
     var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
     val destination = Destination.entries[selectedIndex]
+    val configured = BuildConfig.UPDATE_OWNER.isNotBlank() && BuildConfig.UPDATE_REPO.isNotBlank()
+    var updateState by remember(configured) {
+        mutableStateOf<UpdateState>(if (configured) UpdateState.Checking else UpdateState.NotConfigured)
+    }
+    val updateScope = rememberCoroutineScope()
+
+    LaunchedEffect(configured) {
+        if (configured) {
+            updateState = UpdateState.Checking
+            updateState = withContext(Dispatchers.IO) { checkForUpdate() }
+        }
+    }
 
     HookManagerTheme {
         Scaffold(
@@ -200,7 +213,16 @@ private fun HookManagerApp() {
             when (destination) {
                 Destination.Overview -> OverviewScreen(padding)
                 Destination.Logs -> LogsScreen(padding)
-                Destination.Updates -> UpdatesScreen(padding)
+                Destination.Updates -> UpdatesScreen(
+                    padding = padding,
+                    updateState = updateState,
+                    onCheck = {
+                        updateState = UpdateState.Checking
+                        updateScope.launch {
+                            updateState = withContext(Dispatchers.IO) { checkForUpdate() }
+                        }
+                    },
+                )
             }
         }
     }
@@ -353,13 +375,13 @@ private fun LogsScreen(padding: PaddingValues) {
 }
 
 @Composable
-private fun UpdatesScreen(padding: PaddingValues) {
+private fun UpdatesScreen(
+    padding: PaddingValues,
+    updateState: UpdateState,
+    onCheck: () -> Unit,
+) {
     val context = LocalContext.current
     val configured = BuildConfig.UPDATE_OWNER.isNotBlank() && BuildConfig.UPDATE_REPO.isNotBlank()
-    var updateState by remember(configured) {
-        mutableStateOf<UpdateState>(if (configured) UpdateState.Idle else UpdateState.NotConfigured)
-    }
-    val scope = rememberCoroutineScope()
     Column(
         Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -380,12 +402,7 @@ private fun UpdatesScreen(padding: PaddingValues) {
                     Text(updateState.label(), color = MaterialTheme.colorScheme.primary)
                     Button(
                         enabled = updateState !is UpdateState.Checking,
-                        onClick = {
-                            updateState = UpdateState.Checking
-                            scope.launch {
-                                updateState = withContext(Dispatchers.IO) { checkForUpdate() }
-                            }
-                        },
+                        onClick = onCheck,
                     ) {
                         Icon(Icons.Default.SystemUpdate, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -402,8 +419,7 @@ private fun UpdatesScreen(padding: PaddingValues) {
                     }
                 } else {
                     Text("尚未配置新仓库", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("新应用发布仓库确定后，将在正式构建配置中接入更新检查。当前不会访问旧仓库。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = { }) { Text("查看发布配置说明") }
+                    Text("当前构建没有配置 GitHub Releases 更新源。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
