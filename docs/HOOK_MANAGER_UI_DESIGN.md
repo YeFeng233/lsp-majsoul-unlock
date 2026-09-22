@@ -1,20 +1,20 @@
 # 雀魂 Max Hook 独立管理界面设计
 
-日期：2026-09-22　状态：实施中（P1 管理应用外壳已完成）
+日期：2026-09-22　状态：实施中（管理应用与 GitHub Releases 更新链路已接通）
 
 本方案以现有 `hook-probe` 为基础，设计一个独立发布的 Hook 模块管理应用，使用用户提供的麻将牌图标，提供运行概览、日志查看、检查更新三个页面。新应用将迁入新仓库，独立构建和发布，与当前仓库的代理应用 `app/`（`com.yefeng.majmax`）是两个产品。管理界面与 API 102 Hook 模块打包在同一个新应用 APK 中，用户只需安装这一份 APK。
 
 工作名称为“雀魂 Max Hook”；原型包名 `com.yefeng.majmax.hookprobe` 暂作为兼容基线，正式发布前确定最终 applicationId。独立发布不要求更换现有 Hook 包名；若更换，需按全新模块安装并重新配置 LSPosed 作用域。MOD 功能配置继续由游戏内“设置 → MOD设置”承载，包括同一昵称弹窗中的确认与“恢复原昵称”。
 
-已确认的发布决策：**新应用、新仓库、独立版本与签名；更新检查指向未来提供的新仓库地址。** 新仓库尚未指定不阻碍界面与更新逻辑开发，开发构建以“尚未配置更新源”呈现，不向旧仓库发出替代请求。
+已确认的发布决策：**新应用、新仓库、独立版本与签名；更新检查指向 `YeFeng233/lsp-majsoul-unlock` 的 GitHub Releases。** 稳定发布使用 `v*` 标签，当前已发布 `v0.4.4`。
 
-本轮已将 P1 管理应用外壳接入 `hook-probe`：桌面入口、图标、主题、概览/日志/更新三页、管理侧日志筛选，以及新仓库未配置空态均已实现并通过 `assembleDebug`。游戏侧结构化诊断文件、root 只读适配器和正式新仓库发布仍按下文计划推进；示例版本与状态不代表已经发布或真机实测。
+本轮已将管理应用外壳接入 `hook-probe`：桌面入口、图标、主题、概览/日志/更新三页、管理侧日志筛选、启动自动检查和手动检查均已实现；`v0.4.4` 已通过 GitHub Actions 构建并发布。游戏侧结构化诊断文件和 root 只读适配器仍按下文计划推进。
 
 ## 1. 现状与设计依据
 
 | 已核实的仓库现状 | 对设计的影响 |
 | --- | --- |
-| `hook-probe/build.gradle.kts`：0.4.3 / versionCode 7，Android 10 起，ARM64，API 102 | 以此为新应用原型；若沿用包身份与签名，升级保留现有模块身份 |
+| `hook-probe/build.gradle.kts`：0.4.4 / versionCode 8，Android 10 起，ARM64，API 102 | 以此为新应用原型；若沿用包身份与签名，升级保留现有模块身份 |
 | `hook-probe/src/main/AndroidManifest.xml`：没有 Activity、桌面图标和网络权限 | 需要新增 Launcher Activity、图标、主题和检查更新所需的 INTERNET 权限 |
 | `ProbeModule.java` 在游戏进程初始化；入口日志写入 LSPosed 模块日志 | 管理界面自己的进程不能据此直接判断模块是否已在游戏内生效 |
 | C++、Rust、Lua 桥接日志主要使用 `MajsoulHook` logcat 标签 | 需要设计跨应用日志读取和持久化；仅在管理应用执行普通 logcat 不足以完成需求 |
@@ -176,7 +176,7 @@
 └──────────────────────────────────┘
 ~~~
 
-首版范围是手动检查、显示版本与更新说明、打开匹配的发布页面。用户从浏览器下载并经系统安装；管理应用首版不包含后台下载、静默安装、自动重启游戏或定时更新任务。
+当前范围是应用启动自动检查、手动检查、显示版本与更新说明、打开匹配的发布页面。用户从浏览器下载并经系统安装；管理应用不包含后台下载、静默安装、自动重启游戏或定时更新任务。
 
 | 状态 | 呈现 |
 | --- | --- |
@@ -278,13 +278,13 @@ root 适配器只接受内部文件枚举和有界数字偏移，不接受自由
 
 ### 6.1 来源和识别
 
-更新来源是用户后续指定的**新 Hook 仓库**。构建配置通过 `-PupdateOwner`、`-PupdateRepo` 与 `-PupdateChannel` 生成 `UPDATE_OWNER`、`UPDATE_REPO` 和 `UPDATE_CHANNEL`，由仓库地址解析为 GitHub owner/repo；业务代码不写死当前 origin。开发阶段未配置时进入独立空态，不发网络请求；正式 release 构建要求填写有效的新仓库配置。应用不提供让最终用户输入任意更新服务器的入口。
+更新来源固定为 `YeFeng233/lsp-majsoul-unlock`。构建配置通过 `-PupdateOwner`、`-PupdateRepo` 与 `-PupdateChannel` 生成 `UPDATE_OWNER`、`UPDATE_REPO` 和 `UPDATE_CHANNEL`；业务代码只读取构建配置，不提供让最终用户输入任意更新服务器的入口。
 
 检查对象是新应用 APK，不能拿上游 Rust 的 `0.7.0` 或旧代理应用版本与 Hook 版本比较。更新源变更与最终 applicationId 同时固化进发布配置；包名校验从本应用身份读取，不依赖原型包名常量。
 
-拟使用新仓库的 GitHub 公共 Releases API，串行请求发布列表，筛选 `v*` 标签、非 draft、非 prerelease 的条目。新仓库只承载这一应用，正式标签采用 `v0.5.0` 这样的标准形式；仍校验发布元数据中的应用身份，防止误包。公开发布信息可匿名读取，不要求用户填写 GitHub Token。[GitHub Releases API](https://docs.github.com/en/rest/releases/releases#list-releases)
+使用该仓库的 GitHub 公共 Releases API，串行请求发布列表，筛选 `v*` 标签、非 draft、非 prerelease 的条目。当前稳定发布为 `v0.4.4`；仍校验发布元数据中的应用身份，防止误包。公开发布信息可匿名读取，不要求用户填写 GitHub Token。[GitHub Releases API](https://docs.github.com/en/rest/releases/releases#list-releases)
 
-每个 Hook 发布必须包含 `hook-update.json` 与固定命名的 APK；以下是**拟定协议示例，不是已存在的发布资产**：
+每个 Hook 发布必须包含 `hook-update.json` 与固定命名的 APK；当前 `v0.4.4` 已按此协议发布：
 
 ~~~json
 {
@@ -292,17 +292,17 @@ root 适配器只接受内部文件枚举和有界数字偏移，不接受自由
   "applicationId": "com.yefeng.majmax.hookprobe",
   "channel": "stable",
   "versionCode": 8,
-  "versionName": "0.5.0",
+  "versionName": "0.4.4",
   "minSdk": 29,
   "abis": ["arm64-v8a"],
-  "releaseTag": "v0.5.0",
-  "assetName": "MajsoulMax-Hook-0.5.0-arm64-v8a.apk"
+  "releaseTag": "v0.4.4",
+  "assetName": "MajsoulMax-Hook-0.4.4-arm64-v8a.apk"
 }
 ~~~
 
 - 上例包名沿用原型，仅用于说明协议；最终 applicationId 由新应用发布配置确定，并由 CI 自动写入。
 - CI 从最终 APK 提取包名、版本、最低系统与 ABI 生成元数据，不维护第二份手填版本号。元数据需与发布标签及确实存在的 APK asset 一致。
-- `versionCode` 是升级排序依据；`versionName` 只展示，不能用字符串大小或发布时间决定升级关系。
+- `versionCode` 是升级排序依据；`versionName` 只展示，不能用字符串大小或发布时间决定升级关系。当前发布版本为 versionCode 8 / 0.4.4。
 - 当前版本取本机 PackageManager；渠道与构建类型由构建配置提供。版本 8 / 0.5.0 只是下一版示例，实施前分配实际未使用的版本号。
 - 顺着 API 的 Link 分页遍历，首版最多读取 5 页、每页 100 项。超过上限仍有后续页时显示“无法确认最新版本”，不输出假定的最新结论；后续发布量增长再改为独立渠道索引。
 - 合格发布中选择兼容的最大 versionCode；更高但不兼容的发布单独提示。所有 Hook 候选元数据必须完成检查，相关条目损坏或缺失时不能以较旧条目宣称已是最新。
@@ -310,7 +310,7 @@ root 适配器只接受内部文件枚举和有界数字偏移，不接受自由
 
 ### 6.2 网络行为
 
-检查只由用户触发，重复点击复用同一个任务。连接超时 10 秒，单请求总超时 20 秒，整次检查预算 60 秒；JSON 体积上限 2 MiB、单个 Hook 元数据上限 64 KiB、更新说明展示上限 32 KiB。超出预算保留已知结果但标注检查未完成。
+检查在应用启动时自动触发，也可由用户手动触发；重复点击复用同一个任务。连接超时 10 秒，单请求总超时 20 秒，整次检查预算 60 秒；JSON 体积上限 2 MiB、单个 Hook 元数据上限 64 KiB、更新说明展示上限 32 KiB。超出预算保留已知结果但标注检查未完成。
 
 缓存 ETag 和已验证响应，304 使用对应缓存；没有缓存时不能把 304 当作空列表。403/429 检查限流头，遵守 Retry-After 或重置时间；其他权限错误另行提示。没有限流恢复时间时至少等待一分钟，首版不自动重试循环。[GitHub REST API 最佳实践](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)
 
@@ -318,7 +318,7 @@ root 适配器只接受内部文件枚举和有界数字偏移，不接受自由
 
 ### 6.3 发布与签名
 
-在新仓库新增专门的 `build-hook.yml`，触发 `v*` 标签和手动构建，完成原生库、APK、元数据与校验和的发布。版本、签名密钥、发布权限和 release 资产均由新仓库独立管理，不从旧应用的 CI 或签名环境自动继承。
+仓库的 `.github/workflows/build-apk.yml` 触发 `v*` 标签和手动构建，完成原生库、APK、元数据与 Release 资产的发布。版本、签名密钥、发布权限和 Release 资产均由新仓库独立管理，不从旧应用的 CI 或签名环境自动继承。
 
 Hook 发布要使用持续稳定的签名。当前本地安装产物为 debug 构建；正式签名若与已安装证书不一致，不能承诺覆盖安装。实现前读取现有 APK 证书与拟发布签名做比对，明确升级路径，不能靠重命名 APK 解决。UI 标明构建类型；CI 校验最终 APK 身份及证书，避免错包发布。
 
@@ -399,9 +399,8 @@ hook-probe/rust-modder/src/diagnostics.rs
 ## 9. 实现前仍需实证的事项
 
 - 当前设备 root 管理器对管理应用只读目标文件的实际授权、SELinux 行为及超时处理，需要 P0 真机验证。
-- 新仓库地址待用户提供；通过构建配置定向即可。地址未配置时显示“尚未配置更新源”，配置后尚无合格发布资产时显示“暂未找到发布包”。当前不创建新仓库、不上传代码，也不修改旧仓库的 release。
-- 新仓库需要建立与本协议配套的 Hook CI；本方案未认定远端已存在 `hook-update.json`。
-- 正式签名与当前本地 debug 签名的兼容性尚未比对；这一点影响覆盖安装路径，不影响先实现三页界面。
+- 当前更新源为 `YeFeng233/lsp-majsoul-unlock`，并已存在包含 `hook-update.json` 和 APK 的 `v0.4.4` Release。
+- 正式签名与当前本地 debug 签名的长期兼容性仍需在后续发布前固定签名密钥；这不影响当前 Release 的检查和安装。
 - 当前模块日志没有稳定事件协议；需要补充结构化事件后才能实现可靠的状态与筛选，不能只通过翻译现有字符串拼接出“已生效”。
 
 设计完成标准：用户能安装独立发布的新应用，从新图标打开模块管理界面，看懂最近运行证据、定位并导出日志、准确检查新仓库中的 Hook 版本更新；游戏内 MOD 配置继续使用已经完成的游戏原生界面。
