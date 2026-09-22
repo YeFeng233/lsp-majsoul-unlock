@@ -239,6 +239,90 @@ pub unsafe extern "C" fn majmax_ai_free(value: *mut c_char) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use akagi_mobile_core::bridge::majsoul::parser::{POOL, ROUTES};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use prost::Message;
+    use prost_reflect::DynamicMessage;
+
+    fn proto(name: &str, value: Value) -> Vec<u8> {
+        let descriptor = POOL.get_message_by_name(name.trim_start_matches('.')).unwrap();
+        let text = value.to_string();
+        DynamicMessage::deserialize(descriptor, &mut serde_json::Deserializer::from_str(&text))
+            .unwrap().encode_to_vec()
+    }
+
+    fn wire(kind: u8, id: u16, method: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut out = vec![kind];
+        if kind != 1 { out.extend(id.to_le_bytes()); }
+        out.extend(proto("lq.Wrapper", json!({"name":method,"data":STANDARD.encode(bytes)})));
+        out
+    }
+
+    fn rpc(host: &mut Assistant, method: &str, request: Value, response: Value) -> Option<Value> {
+        let request_type = ROUTES[method]["req"].as_str().unwrap();
+        let response_type = ROUTES[method]["resp"].as_str().unwrap();
+        host.frame(7, 1, &wire(2, 1, method, &proto(request_type, request))).unwrap();
+        host.frame(7, 0, &wire(3, 1, "", &proto(response_type, response))).unwrap()
+    }
+
+    fn authenticate(host: &mut Assistant, players: u8) {
+        let seats: Vec<u32> = (0..players).map(|n| u32::from(n) + 101).collect();
+        rpc(host, ".lq.FastTest.authGame", json!({"account_id":101,"game_uuid":"local-test-only"}),
+            json!({"seat_list":seats}));
+    }
+
+    fn round_bytes(players: u8) -> Vec<u8> {
+        let tiles = if players == 4 {
+            vec!["1m","2m","3m","4m","5m","6m","7m","8m","9m","1p","2p","3p","1s","9s"]
+        } else {
+            vec!["1p","2p","3p","4p","5p","6p","7s","8s","9s","1s","1s","1m","1m","9m"]
+        };
+        proto("lq.ActionNewRound", json!({"tiles":tiles,"scores":vec![25000;players as usize],
+            "doras":["9p"],"ju":0,"chang":0,"left_tile_count":69}))
+    }
+
+    fn live_round(host: &mut Assistant, players: u8) -> Value {
+        let mut data = round_bytes(players);
+        let keys = [0x84usize,0x5e,0x4e,0x42,0x39,0xa2,0x1f,0x60,0x1c];
+        let base = 23 ^ data.len();
+        for (i, byte) in data.iter_mut().enumerate() { *byte ^= (base + 5 * i + keys[i % 9]) as u8; }
+        let action = proto("lq.ActionPrototype", json!({"step":1,"name":"ActionNewRound","data":STANDARD.encode(data)}));
+        host.frame(7, 0, &wire(1, 0, ".lq.ActionPrototype", &action)).unwrap().unwrap()
+    }
+
+    #[test]
+    fn live_wire_decodes_seat_hand_and_legal_advice_in_both_modes() {
+        for players in [4, 3] {
+            let mut host = Assistant::new();
+            authenticate(&mut host, players);
+            let result = live_round(&mut host, players);
+            assert_eq!(result["status"], "live");
+            assert_eq!(result["players"], players);
+            assert_eq!(result["seat"], 0);
+            assert_eq!(result["hand"].as_array().unwrap().len(), 14);
+            assert!(!result["recommendations"].as_array().unwrap().is_empty());
+            let snap = host.tracker.snapshot().unwrap();
+            for other in snap.players.iter().skip(1) {
+                assert!(other.tehai.iter().all(|tile| tile == "?"));
+            }
+        }
+    }
+
+    #[test]
+    fn restore_uses_plain_protobuf_and_matches_live_hand() {
+        let mut live = Assistant::new();
+        authenticate(&mut live, 4);
+        let expected = live_round(&mut live, 4);
+        let mut restored = Assistant::new();
+        authenticate(&mut restored, 4);
+        let result = rpc(&mut restored, ".lq.FastTest.syncGame", json!({}), json!({
+            "step":1,"game_restore":{"actions":[{"step":1,"name":"ActionNewRound",
+                "data":STANDARD.encode(round_bytes(4))}]}
+        })).unwrap();
+        assert_eq!(result["hand"], expected["hand"]);
+        assert_eq!(result["recommendations"], expected["recommendations"]);
+        assert_eq!(result["analysis"]["shanten"], expected["analysis"]["shanten"]);
+    }
 
     #[test]
     fn bundled_model_produces_legal_local_recommendation() {

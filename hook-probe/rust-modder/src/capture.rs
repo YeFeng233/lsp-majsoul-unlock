@@ -4,7 +4,7 @@
 mod android {
     use std::{
         io::Write,
-        os::{fd::AsRawFd, linux::net::SocketAddrExt, unix::net::{SocketAddr, UnixStream}},
+        os::{fd::AsRawFd, android::net::SocketAddrExt, unix::net::{SocketAddr, UnixStream}},
         sync::{atomic::{AtomicBool, AtomicU64, Ordering}, mpsc::{self, SyncSender}, Mutex, OnceLock},
         time::Duration,
     };

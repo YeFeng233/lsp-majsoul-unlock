@@ -43,13 +43,14 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           workspaces: |
             hook-probe/rust-modder
             hook-probe/rust-ai
 
       - name: Test local AI and protocol recovery
         working-directory: hook-probe/rust-ai
-        run: cargo test --release
+        run: cargo test --release --locked
 
       - name: Build local AI engine
         working-directory: hook-probe/rust-ai
@@ -59,7 +60,7 @@ jobs:
           AR_aarch64_linux_android: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           RUSTFLAGS: -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384
         run: |
-          cargo build --target aarch64-linux-android --release
+          cargo build --target aarch64-linux-android --release --locked
           mkdir -p ../build/native-libs/arm64-v8a
           cp target/aarch64-linux-android/release/libmajsoulai.so ../build/native-libs/arm64-v8a/
 

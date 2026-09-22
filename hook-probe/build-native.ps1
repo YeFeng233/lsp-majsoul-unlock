@@ -19,3 +19,10 @@ if ($LASTEXITCODE -ne 0) { throw "Rust build failed: $LASTEXITCODE" }
     '-Wl,-rpath,$ORIGIN' -L $destination -lmajsoulmodder -llog -ldl `
     -o (Join-Path $destination 'libmajsoulprobe.so')
 if ($LASTEXITCODE -ne 0) { throw "Native build failed: $LASTEXITCODE" }
+& $compiler --target=aarch64-linux-android29 -std=c++17 -shared -fPIC -O2 `
+    -Wall -Wextra -Werror -fvisibility=hidden -fno-exceptions -fno-rtti -static-libstdc++ `
+    '-Wl,-z,max-page-size=16384' '-Wl,-z,common-page-size=16384' `
+    (Join-Path $PSScriptRoot 'src\main\cpp\ai_jni.cpp') `
+    '-Wl,-rpath,$ORIGIN' -L $destination -lmajsoulai `
+    -o (Join-Path $destination 'libmajsoulai_jni.so')
+if ($LASTEXITCODE -ne 0) { throw "AI JNI build failed: $LASTEXITCODE" }

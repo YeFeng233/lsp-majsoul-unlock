@@ -14,6 +14,14 @@ val stageUpstreamAssets by tasks.registering(Copy::class) {
         include("max_data.yaml", "settings.mod.json")
         into("liqi_config")
     }
+    from(rootProject.projectDir.resolve("../external/Akagi/LICENSE.txt")) {
+        into("licenses")
+        rename { "Akagi-LICENSE.txt" }
+    }
+    from(rootProject.projectDir.resolve("../external/Akagi/NOTICE")) {
+        into("licenses")
+        rename { "Akagi-NOTICE.txt" }
+    }
     into(stagedAssets)
 }
 
@@ -26,8 +34,8 @@ android {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.4.4"
+        versionCode = 9
+        versionName = "0.5.0"
         buildConfigField("String", "UPDATE_OWNER", "\"${updateOwner.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_CHANNEL", "\"${updateChannel.replace("\"", "\\\"")}\"")
@@ -74,7 +82,9 @@ tasks.named("preBuild") {
     doFirst {
         val nativeDir = layout.buildDirectory.dir("native-libs/arm64-v8a").get().asFile
         check(nativeDir.resolve("libmajsoulprobe.so").isFile &&
-                nativeDir.resolve("libmajsoulmodder.so").isFile) {
+                nativeDir.resolve("libmajsoulmodder.so").isFile &&
+                nativeDir.resolve("libmajsoulai.so").isFile &&
+                nativeDir.resolve("libmajsoulai_jni.so").isFile) {
             "Build the native probe first: ./build-native.ps1 -NdkPath <Android NDK directory>"
         }
     }

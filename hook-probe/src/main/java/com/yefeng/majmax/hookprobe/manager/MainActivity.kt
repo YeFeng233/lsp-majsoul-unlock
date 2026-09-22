@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -90,7 +91,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Destination(val title: String) {
-    Overview("概览"), Logs("日志"), Updates("更新")
+    Overview("概览"), Assistant("助手"), Logs("日志"), Updates("更新")
 }
 
 private data class DiagnosticLog(
@@ -198,6 +199,7 @@ private fun HookManagerApp() {
                                 Icon(
                                     when (item) {
                                         Destination.Overview -> Icons.Default.Home
+                                        Destination.Assistant -> Icons.Default.SmartToy
                                         Destination.Logs -> Icons.AutoMirrored.Filled.Article
                                         Destination.Updates -> Icons.Default.SystemUpdate
                                     },
@@ -212,6 +214,7 @@ private fun HookManagerApp() {
         ) { padding ->
             when (destination) {
                 Destination.Overview -> OverviewScreen(padding)
+                Destination.Assistant -> AiScreen(padding)
                 Destination.Logs -> LogsScreen(padding)
                 Destination.Updates -> UpdatesScreen(
                     padding = padding,
