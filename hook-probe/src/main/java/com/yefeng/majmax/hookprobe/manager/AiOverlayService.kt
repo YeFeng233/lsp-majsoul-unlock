@@ -7,8 +7,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
-import android.net.LocalServerSocket
-import android.net.LocalSocket
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -19,12 +17,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.io.DataInputStream
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 data class AiServiceStatus(val running: Boolean = false, val connected: Boolean = false,
     val message: String = "助手未开启")
+internal data class CaptureEndpoint(val port: Int, val token: ByteArray)
 
 object AiStatus {
     internal val mutable = MutableStateFlow(AiServiceStatus())
@@ -37,6 +42,12 @@ class AiOverlayService : Service() {
         private const val LIVE = "local-ai.LIVE"
         private const val DEMO = "local-ai.DEMO"
         private const val STOP = "local-ai.STOP"
+        @Volatile private var advertisedEndpoint: CaptureEndpoint? = null
+
+        internal fun currentEndpoint(): CaptureEndpoint? = advertisedEndpoint?.let {
+            CaptureEndpoint(it.port, it.token.copyOf())
+        }
+
         fun start(context: Context, demo: Boolean = false) {
             ContextCompat.startForegroundService(context,
                 Intent(context, AiOverlayService::class.java).setAction(if (demo) DEMO else LIVE))
@@ -52,8 +63,8 @@ class AiOverlayService : Service() {
     private val revision = AtomicLong(0)
     private val queue = ArrayBlockingQueue<Packet>(64)
     private val main = Handler(Looper.getMainLooper())
-    @Volatile private var server: LocalServerSocket? = null
-    @Volatile private var client: LocalSocket? = null
+    @Volatile private var server: ServerSocket? = null
+    @Volatile private var client: Socket? = null
     @Volatile private var connected = false
     private var reader: Thread? = null
     private var worker: Thread? = null
@@ -105,18 +116,29 @@ class AiOverlayService : Service() {
 
     private fun listen() {
         try {
-            val expectedUid = packageManager.getApplicationInfo(GAME, 0).uid
-            val listener = LocalServerSocket("majmax.local-ai.v1")
+            val listener = ServerSocket()
+            listener.reuseAddress = false
+            listener.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 8)
             server = listener
+            val token = ByteArray(32).also(SecureRandom()::nextBytes)
+            advertisedEndpoint = CaptureEndpoint(listener.localPort, token)
             while (alive.get()) {
                 val socket = listener.accept()
-                if (socket.peerCredentials.uid != expectedUid) { socket.close(); continue }
-                client = socket
-                connected = true
-                if (!demoMode.get()) reset("Hook 已连接，等待进入牌局；中途开启请重新进入")
+                var authenticated = false
                 try {
-                    socket.soTimeout = 8_000
+                    socket.soTimeout = 2_000
                     val input = DataInputStream(socket.inputStream)
+                    val suppliedToken = ByteArray(32)
+                    input.readFully(suppliedToken)
+                    if (!socket.inetAddress.isLoopbackAddress ||
+                        !MessageDigest.isEqual(token, suppliedToken)) {
+                        continue
+                    }
+                    authenticated = true
+                    client = socket
+                    connected = true
+                    if (!demoMode.get()) reset("Hook 已连接，等待进入牌局；中途开启请重新进入")
+                    socket.soTimeout = 8_000
                     var sourceGeneration: Long? = null
                     while (alive.get()) {
                         val size = input.readInt()
@@ -143,13 +165,17 @@ class AiOverlayService : Service() {
                     // No raw frames, credentials or account identifiers are logged.
                 } finally {
                     runCatching { socket.close() }
-                    client = null
-                    connected = false
-                    if (alive.get() && !demoMode.get()) reset("游戏连接已断开，等待重新同步")
+                    if (authenticated) {
+                        client = null
+                        connected = false
+                        if (alive.get() && !demoMode.get()) reset("游戏连接已断开，等待重新同步")
+                    }
                 }
             }
         } catch (_: Exception) {
             if (alive.get()) reset("采集服务未启动，请确认游戏已安装并重新开启助手")
+        } finally {
+            advertisedEndpoint = null
         }
     }
 
@@ -196,6 +222,7 @@ class AiOverlayService : Service() {
     override fun onDestroy() {
         alive.set(false)
         epoch.incrementAndGet()
+        advertisedEndpoint = null
         runCatching { client?.close() }
         runCatching { server?.close() }
         reader?.interrupt()

@@ -1,35 +1,140 @@
 //! Bounded, nonblocking copy of original frames to the on-device AI service.
-//! No model, protobuf decoding, disk writes or inference in the game process.
+//! No model, protobuf decoding, disk writes or inference run in the game process.
 #[cfg(target_os = "android")]
 mod android {
     use std::{
         io::Write,
-        os::{fd::AsRawFd, android::net::SocketAddrExt, unix::net::{SocketAddr, UnixStream}},
-        sync::{atomic::{AtomicBool, AtomicU64, Ordering}, mpsc::{self, SyncSender}, Mutex, OnceLock},
+        net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
+        sync::{
+            Mutex, OnceLock,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            mpsc::{self, SyncSender},
+        },
         time::Duration,
     };
 
     const MAX_FRAME: usize = 1024 * 1024;
+    const TOKEN_SIZE: usize = 32;
     static CONNECTED: AtomicBool = AtomicBool::new(false);
     static GENERATION: AtomicU64 = AtomicU64::new(1);
+    static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
+    static ENDPOINT: OnceLock<Mutex<Option<Endpoint>>> = OnceLock::new();
     static SENDER: OnceLock<Mutex<SyncSender<Frame>>> = OnceLock::new();
-    struct Frame { connection: u64, kind: u8, data: Vec<u8> }
 
-    fn connect(uid: u32) -> std::io::Result<UnixStream> {
-        let address = SocketAddr::from_abstract_name(b"majmax.local-ai.v1")?;
-        let stream = UnixStream::connect_addr(&address)?;
-        let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
-        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        let result = unsafe { libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET,
-            libc::SO_PEERCRED, (&mut credentials as *mut libc::ucred).cast(), &mut length) };
-        if result != 0 || credentials.uid != uid {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "unexpected AI service UID"));
-        }
-        stream.set_write_timeout(Some(Duration::from_millis(250)))?;
-        Ok(stream)
+    #[derive(Clone, PartialEq, Eq)]
+    struct Endpoint {
+        port: u16,
+        token: [u8; TOKEN_SIZE],
     }
 
-    fn write_frame(stream: &mut UnixStream, frame: &Frame) -> std::io::Result<()> {
+    struct Frame {
+        connection: u64,
+        kind: u8,
+        data: Vec<u8>,
+    }
+
+    fn endpoint_slot() -> &'static Mutex<Option<Endpoint>> {
+        ENDPOINT.get_or_init(|| Mutex::new(None))
+    }
+
+    pub fn configure() {
+        if SENDER.get().is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::sync_channel::<Frame>(32);
+        if SENDER.set(Mutex::new(tx)).is_err() {
+            return;
+        }
+        let _ = std::thread::Builder::new()
+            .name("majmax-ai-copy".into())
+            .spawn(move || {
+                let mut socket: Option<TcpStream> = None;
+                let mut active_revision = u64::MAX;
+                loop {
+                    let revision = CONFIG_REVISION.load(Ordering::SeqCst);
+                    if revision != active_revision {
+                        socket = None;
+                        CONNECTED.store(false, Ordering::SeqCst);
+                        while rx.try_recv().is_ok() {}
+                        active_revision = revision;
+                    }
+
+                    if socket.is_none() {
+                        let endpoint = endpoint_slot().lock().ok().and_then(|value| value.clone());
+                        let Some(endpoint) = endpoint else {
+                            std::thread::sleep(Duration::from_millis(500));
+                            continue;
+                        };
+                        let address =
+                            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, endpoint.port));
+                        match TcpStream::connect_timeout(&address, Duration::from_millis(800)) {
+                            Ok(mut stream) => {
+                                let ready = stream.write_all(&endpoint.token).and_then(|_| {
+                                    stream.set_write_timeout(Some(Duration::from_millis(250)))
+                                });
+                                if ready.is_err() {
+                                    std::thread::sleep(Duration::from_millis(500));
+                                    continue;
+                                }
+                                socket = Some(stream);
+                                CONNECTED.store(true, Ordering::SeqCst);
+                            }
+                            Err(_) => {
+                                std::thread::sleep(Duration::from_secs(1));
+                                continue;
+                            }
+                        }
+                    }
+
+                    let frame = match rx.recv_timeout(Duration::from_secs(1)) {
+                        Ok(frame) => frame,
+                        Err(mpsc::RecvTimeoutError::Timeout) => Frame {
+                            connection: 0,
+                            kind: 4,
+                            data: Vec::new(),
+                        },
+                        Err(_) => break,
+                    };
+                    if CONFIG_REVISION.load(Ordering::SeqCst) != active_revision {
+                        continue;
+                    }
+                    if let Some(stream) = socket.as_mut() {
+                        if write_frame(stream, &frame).is_err() {
+                            CONNECTED.store(false, Ordering::SeqCst);
+                            GENERATION.fetch_add(1, Ordering::SeqCst);
+                            socket = None;
+                        }
+                    }
+                }
+            });
+    }
+
+    /// Installs or revokes the session endpoint delivered by the UID-checked
+    /// Android ContentProvider. The bearer token is never written to disk/logs.
+    pub fn set_endpoint(port: u16, token: &[u8]) {
+        let next = if port != 0 && token.len() == TOKEN_SIZE {
+            let mut secret = [0u8; TOKEN_SIZE];
+            secret.copy_from_slice(token);
+            Some(Endpoint {
+                port,
+                token: secret,
+            })
+        } else {
+            None
+        };
+        let Ok(mut current) = endpoint_slot().lock() else {
+            return;
+        };
+        if *current == next {
+            return;
+        }
+        *current = next;
+        CONFIG_REVISION.fetch_add(1, Ordering::SeqCst);
+        GENERATION.fetch_add(1, Ordering::SeqCst);
+        CONNECTED.store(false, Ordering::SeqCst);
+    }
+
+    fn write_frame(stream: &mut TcpStream, frame: &Frame) -> std::io::Result<()> {
         // Network byte order: payload length, loss/reconnect generation,
         // opaque connection ID, direction (0 down / 1 up / 2 close / 4 ping).
         let mut header = [0u8; 21];
@@ -41,45 +146,10 @@ mod android {
         stream.write_all(&frame.data)
     }
 
-    pub fn configure(uid: u32) {
-        if uid == 0 || SENDER.get().is_some() { return; }
-        let (tx, rx) = mpsc::sync_channel::<Frame>(32);
-        if SENDER.set(Mutex::new(tx)).is_err() { return; }
-        let _ = std::thread::Builder::new().name("majmax-ai-copy".into()).spawn(move || {
-            let mut socket: Option<UnixStream> = None;
-            loop {
-                if socket.is_none() {
-                    CONNECTED.store(false, Ordering::SeqCst);
-                    while rx.try_recv().is_ok() {}
-                    match connect(uid) {
-                        Ok(stream) => {
-                            GENERATION.fetch_add(1, Ordering::SeqCst);
-                            socket = Some(stream);
-                            CONNECTED.store(true, Ordering::SeqCst);
-                        }
-                        Err(_) => {
-                            std::thread::sleep(Duration::from_secs(1));
-                            continue;
-                        }
-                    }
-                }
-                let frame = match rx.recv_timeout(Duration::from_secs(1)) {
-                    Ok(frame) => frame,
-                    Err(mpsc::RecvTimeoutError::Timeout) => Frame { connection: 0, kind: 4, data: Vec::new() },
-                    Err(_) => break,
-                };
-                if let Some(stream) = socket.as_mut() {
-                    if write_frame(stream, &frame).is_err() {
-                        CONNECTED.store(false, Ordering::SeqCst);
-                        socket = None;
-                    }
-                }
-            }
-        });
-    }
-
     pub fn publish(connection: usize, kind: u8, data: &[u8]) {
-        if !CONNECTED.load(Ordering::Relaxed) { return; }
+        if !CONNECTED.load(Ordering::Relaxed) {
+            return;
+        }
         if data.len() > MAX_FRAME {
             GENERATION.fetch_add(1, Ordering::SeqCst);
             return;
@@ -90,14 +160,22 @@ mod android {
             GENERATION.fetch_add(1, Ordering::SeqCst);
             return;
         };
-        let frame = Frame { connection: connection as u64, kind, data: data.to_vec() };
-        if sender.try_send(frame).is_err() { GENERATION.fetch_add(1, Ordering::SeqCst); }
+        let frame = Frame {
+            connection: connection as u64,
+            kind,
+            data: data.to_vec(),
+        };
+        if sender.try_send(frame).is_err() {
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
 #[cfg(target_os = "android")]
-pub use android::{configure, publish};
+pub use android::{configure, publish, set_endpoint};
 #[cfg(not(target_os = "android"))]
-pub fn configure(_: u32) {}
+pub fn configure() {}
+#[cfg(not(target_os = "android"))]
+pub fn set_endpoint(_: u16, _: &[u8]) {}
 #[cfg(not(target_os = "android"))]
 pub fn publish(_: usize, _: u8, _: &[u8]) {}

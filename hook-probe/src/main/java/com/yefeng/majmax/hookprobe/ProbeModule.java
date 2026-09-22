@@ -2,6 +2,7 @@ package com.yefeng.majmax.hookprobe;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.net.Uri;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
@@ -12,7 +13,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -22,15 +26,27 @@ import io.github.libxposed.api.XposedModule;
 public final class ProbeModule extends XposedModule {
     private static final String GAME = "com.soulgamechst.majsoul";
     private static final String TAG = "MajsoulProbe";
+    private static final Uri AI_ENDPOINT_URI = Uri.parse(
+            "content://com.yefeng.majmax.hookprobe.ai/capture");
     private static final String ASSET_VERSION = "0.4.3";
     private static final String[] VERSIONED_ASSETS = {
             "max_data.yaml", "ui/MajsoulMaxSettings.lua"
     };
     private static final String[] USER_ASSETS = {"settings.mod.json"};
     private static final AtomicBoolean CONFIGURED = new AtomicBoolean();
+    private static final AtomicBoolean AI_ENDPOINT_POLLING = new AtomicBoolean();
+    private static final java.util.concurrent.ScheduledExecutorService AI_ENDPOINT_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor(task -> {
+                Thread thread = new Thread(task, "majmax-ai-endpoint");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private static volatile int aiEndpointPort;
+    private static volatile byte[] aiEndpointToken = new byte[0];
     private boolean targetProcess;
 
-    private static native int nativeConfigure(String configDir, int managerUid);
+    private static native int nativeConfigure(String configDir);
+    private static native void nativeCaptureEndpoint(int port, byte[] token);
 
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
@@ -84,13 +100,46 @@ public final class ProbeModule extends XposedModule {
                 }
                 for (String name : USER_ASSETS) copyAsset(moduleApk, name, configDir, false);
             }
-            int result = nativeConfigure(configDir.getAbsolutePath(), getModuleApplicationInfo().uid);
+            int result = nativeConfigure(configDir.getAbsolutePath());
             if (result != 0) throw new IOException("nativeConfigure returned " + result);
+            startAiEndpointDiscovery(gameContext.getApplicationContext());
             log(Log.INFO, TAG, "Rust Modder configured at " + configDir);
         } catch (Throwable error) {
             CONFIGURED.set(false);
             log(Log.ERROR, TAG, "Cannot configure Rust Modder; traffic remains unmodified", error);
         }
+    }
+
+    private static void startAiEndpointDiscovery(Context gameContext) {
+        if (!AI_ENDPOINT_POLLING.compareAndSet(false, true)) return;
+        AI_ENDPOINT_EXECUTOR.scheduleWithFixedDelay(() -> {
+            try {
+                Bundle endpoint = gameContext.getContentResolver().call(
+                        AI_ENDPOINT_URI, "endpoint", null, null);
+                int port = endpoint == null ? 0 : endpoint.getInt("port", 0);
+                byte[] token = endpoint == null ? null : endpoint.getByteArray("token");
+                if (port > 0 && port <= 65535 && token != null && token.length == 32) {
+                    if (port != aiEndpointPort || !Arrays.equals(token, aiEndpointToken)) {
+                        nativeCaptureEndpoint(port, token);
+                        Arrays.fill(aiEndpointToken, (byte) 0);
+                        aiEndpointPort = port;
+                        aiEndpointToken = token.clone();
+                    }
+                } else if (aiEndpointPort != 0) {
+                    nativeCaptureEndpoint(0, new byte[0]);
+                    Arrays.fill(aiEndpointToken, (byte) 0);
+                    aiEndpointPort = 0;
+                    aiEndpointToken = new byte[0];
+                }
+            } catch (Throwable ignored) {
+                if (aiEndpointPort != 0) {
+                    nativeCaptureEndpoint(0, new byte[0]);
+                    Arrays.fill(aiEndpointToken, (byte) 0);
+                    aiEndpointPort = 0;
+                    aiEndpointToken = new byte[0];
+                }
+            }
+        }, 0, 1, TimeUnit.SECONDS);
     }
 
     private static void copyAsset(ZipFile moduleApk, String name, File directory,

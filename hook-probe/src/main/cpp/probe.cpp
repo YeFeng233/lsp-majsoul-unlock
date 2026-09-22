@@ -47,7 +47,8 @@ extern "C" int majmax_modder_init(const char *configDir);
 extern "C" int majmax_modder_process(uintptr_t connection, bool fromClient,
         const uint8_t *data, size_t len, RustResult *result);
 extern "C" void majmax_modder_forget_connection(uintptr_t connection);
-extern "C" void majmax_capture_configure(uint32_t managerUid);
+extern "C" void majmax_capture_configure();
+extern "C" void majmax_capture_set_endpoint(uint32_t port, const uint8_t *token, size_t tokenLen);
 extern "C" void majmax_modder_free(uint8_t *data, size_t len);
 extern "C" int majmax_modder_get_settings(RustBuffer *output);
 extern "C" int majmax_modder_update_settings(const uint8_t *patch, size_t patchLen,
@@ -670,7 +671,7 @@ static bool loadUiScript(const char *configDir) {
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeConfigure(
-        JNIEnv *environment, jclass, jstring configDir, jint managerUid) {
+        JNIEnv *environment, jclass, jstring configDir) {
     if (!configDir) return -1;
     const char *path = environment->GetStringUTFChars(configDir, nullptr);
     if (!path) return -2;
@@ -678,10 +679,27 @@ Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeConfigure(
         WARN("UI bootstrap script is missing; settings bridge remains available");
     }
     int result = majmax_modder_init(path);
-    if (managerUid > 0) majmax_capture_configure(static_cast<uint32_t>(managerUid));
+    majmax_capture_configure();
     environment->ReleaseStringUTFChars(configDir, path);
     INFO("Configuration result=%d hooksReady=%s", result, hooksReady.load() ? "true" : "false");
     return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeCaptureEndpoint(
+        JNIEnv *environment, jclass, jint port, jbyteArray token) {
+    if (port <= 0 || !token || environment->GetArrayLength(token) != 32) {
+        majmax_capture_set_endpoint(0, nullptr, 0);
+        return;
+    }
+    jbyte *bytes = environment->GetByteArrayElements(token, nullptr);
+    if (!bytes) {
+        majmax_capture_set_endpoint(0, nullptr, 0);
+        return;
+    }
+    majmax_capture_set_endpoint(static_cast<uint32_t>(port),
+            reinterpret_cast<const uint8_t *>(bytes), 32);
+    environment->ReleaseByteArrayElements(token, bytes, JNI_ABORT);
 }
 
 extern "C" __attribute__((visibility("default"), used))

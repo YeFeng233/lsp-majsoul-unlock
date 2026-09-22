@@ -304,8 +304,22 @@ pub unsafe extern "C" fn majmax_modder_init(config_dir: *const c_char) -> c_int 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn majmax_capture_configure(manager_uid: u32) {
-    capture::configure(manager_uid);
+pub extern "C" fn majmax_capture_configure() {
+    capture::configure();
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn majmax_capture_set_endpoint(
+    port: u32,
+    token: *const u8,
+    token_len: usize,
+) {
+    if token_len != 32 || token.is_null() || port > u16::MAX as u32 {
+        capture::set_endpoint(0, &[]);
+        return;
+    }
+    let token = unsafe { std::slice::from_raw_parts(token, token_len) };
+    capture::set_endpoint(port as u16, token);
 }
 
 #[unsafe(no_mangle)]
