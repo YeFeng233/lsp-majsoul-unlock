@@ -1,0 +1,68 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ARM64 debug APK
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Build Rust modder
+        working-directory: hook-probe/rust-modder
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+          RUSTFLAGS: -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384
+        run: |
+          cargo build --target aarch64-linux-android --release --locked
+          mkdir -p ../build/native-libs/arm64-v8a
+          cp target/aarch64-linux-android/release/libmajsoulmodder.so ../build/native-libs/arm64-v8a/
+
+      - name: Build native hook bridge
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        run: |
+          NDK_CLANG="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
+          "$NDK_CLANG" --target=aarch64-linux-android29 -std=c++17 -shared -fPIC -O2 \
+            -Wall -Wextra -Werror -fvisibility=hidden -fno-exceptions -fno-rtti -static-libstdc++ \
+            -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+            hook-probe/src/main/cpp/probe.cpp \
+            -Wl,-rpath,'\$ORIGIN' -L hook-probe/build/native-libs/arm64-v8a \
+            -lmajsoulmodder -llog -ldl \
+            -o hook-probe/build/native-libs/arm64-v8a/libmajsoulprobe.so
+
+      - name: Build APK
+        run: ./gradlew -p hook-probe --no-daemon assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MajsoulHookProbe-debug
+          path: hook-probe/build/outputs/apk/debug/MajsoulHookProbe-debug.apk
+          if-no-files-found: error
+          retention-days: 7
