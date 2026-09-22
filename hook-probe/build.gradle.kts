@@ -30,6 +30,17 @@ android {
     compileSdk = 35
     buildToolsVersion = "35.0.0"
 
+    // Pin the debug signer explicitly so CI and local builds use the same key.
+    signingConfigs {
+        create("persistentDebug") {
+            storeFile = file(providers.environmentVariable("ANDROID_DEBUG_KEYSTORE_PATH")
+                .orElse("${System.getProperty("user.home")}/.android/debug.keystore").get())
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
@@ -45,6 +56,12 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("persistentDebug")
+        }
     }
 
     compileOptions {

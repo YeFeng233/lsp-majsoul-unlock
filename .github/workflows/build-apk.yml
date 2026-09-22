@@ -107,12 +107,13 @@ jobs:
           ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
         run: |
           test -n "$ANDROID_DEBUG_KEYSTORE_BASE64"
-          install -d -m 700 "$HOME/.android"
-          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null 2>&1
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/ci-debug.keystore"
+          chmod 600 "$RUNNER_TEMP/ci-debug.keystore"
+          keytool -list -keystore "$RUNNER_TEMP/ci-debug.keystore" -storepass android -alias androiddebugkey >/dev/null 2>&1
 
       - name: Build APK
+        env:
+          ANDROID_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
         run: ./gradlew -p hook-probe --no-daemon -PupdateOwner=YeFeng233 -PupdateRepo=lsp-majsoul-unlock -PupdateChannel=stable assembleDebug
 
       - name: Verify APK signature and alignment
