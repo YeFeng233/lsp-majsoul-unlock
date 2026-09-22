@@ -30,7 +30,7 @@ public final class ProbeModule extends XposedModule {
     private static final AtomicBoolean CONFIGURED = new AtomicBoolean();
     private boolean targetProcess;
 
-    private static native int nativeConfigure(String configDir);
+    private static native int nativeConfigure(String configDir, int managerUid);
 
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
@@ -84,7 +84,7 @@ public final class ProbeModule extends XposedModule {
                 }
                 for (String name : USER_ASSETS) copyAsset(moduleApk, name, configDir, false);
             }
-            int result = nativeConfigure(configDir.getAbsolutePath());
+            int result = nativeConfigure(configDir.getAbsolutePath(), getModuleApplicationInfo().uid);
             if (result != 0) throw new IOException("nativeConfigure returned " + result);
             log(Log.INFO, TAG, "Rust Modder configured at " + configDir);
         } catch (Throwable error) {

@@ -32,10 +32,36 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            hook-probe/rust-modder
+            hook-probe/rust-ai
+
+      - name: Test local AI and protocol recovery
+        working-directory: hook-probe/rust-ai
+        run: cargo test --release
+
+      - name: Build local AI engine
+        working-directory: hook-probe/rust-ai
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+          CC_aarch64_linux_android: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+          AR_aarch64_linux_android: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          RUSTFLAGS: -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384
+        run: |
+          cargo build --target aarch64-linux-android --release
+          mkdir -p ../build/native-libs/arm64-v8a
+          cp target/aarch64-linux-android/release/libmajsoulai.so ../build/native-libs/arm64-v8a/
 
       - name: Build Rust modder
         working-directory: hook-probe/rust-modder
@@ -57,9 +83,23 @@ jobs:
             -Wall -Wextra -Werror -fvisibility=hidden -fno-exceptions -fno-rtti -static-libstdc++ \
             -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
             hook-probe/src/main/cpp/probe.cpp \
-            -Wl,-rpath,'\$ORIGIN' -L hook-probe/build/native-libs/arm64-v8a \
+            -Wl,-rpath,'$ORIGIN' -L hook-probe/build/native-libs/arm64-v8a \
             -lmajsoulmodder -llog -ldl \
             -o hook-probe/build/native-libs/arm64-v8a/libmajsoulprobe.so
+          "$NDK_CLANG" --target=aarch64-linux-android29 -std=c++17 -shared -fPIC -O2 \
+            -Wall -Wextra -Werror -fvisibility=hidden -fno-exceptions -fno-rtti -static-libstdc++ \
+            -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+            hook-probe/src/main/cpp/ai_jni.cpp \
+            -Wl,-rpath,'$ORIGIN' -L hook-probe/build/native-libs/arm64-v8a -lmajsoulai \
+            -o hook-probe/build/native-libs/arm64-v8a/libmajsoulai_jni.so
+
+      - name: Upload AI dependency lock
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-ai-cargo-lock
+          path: hook-probe/rust-ai/Cargo.lock
+          retention-days: 7
 
       - name: Build APK
         run: ./gradlew -p hook-probe --no-daemon -PupdateOwner=YeFeng233 -PupdateRepo=lsp-majsoul-unlock -PupdateChannel=stable assembleDebug

@@ -47,6 +47,7 @@ extern "C" int majmax_modder_init(const char *configDir);
 extern "C" int majmax_modder_process(uintptr_t connection, bool fromClient,
         const uint8_t *data, size_t len, RustResult *result);
 extern "C" void majmax_modder_forget_connection(uintptr_t connection);
+extern "C" void majmax_capture_configure(uint32_t managerUid);
 extern "C" void majmax_modder_free(uint8_t *data, size_t len);
 extern "C" int majmax_modder_get_settings(RustBuffer *output);
 extern "C" int majmax_modder_update_settings(const uint8_t *patch, size_t patchLen,
@@ -669,7 +670,7 @@ static bool loadUiScript(const char *configDir) {
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeConfigure(
-        JNIEnv *environment, jclass, jstring configDir) {
+        JNIEnv *environment, jclass, jstring configDir, jint managerUid) {
     if (!configDir) return -1;
     const char *path = environment->GetStringUTFChars(configDir, nullptr);
     if (!path) return -2;
@@ -677,6 +678,7 @@ Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeConfigure(
         WARN("UI bootstrap script is missing; settings bridge remains available");
     }
     int result = majmax_modder_init(path);
+    if (managerUid > 0) majmax_capture_configure(static_cast<uint32_t>(managerUid));
     environment->ReleaseStringUTFChars(configDir, path);
     INFO("Configuration result=%d hooksReady=%s", result, hooksReady.load() ? "true" : "false");
     return result;

@@ -1,0 +1,30 @@
+[package]
+name = "majsoul-local-ai"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[lib]
+name = "majsoulai"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+akagi-mobile-core = { path = "../akagi-core" }
+anyhow = "1"
+native_bot = { path = "../../external/Akagi/native_bot" }
+serde_json = "1"
+
+[dev-dependencies]
+prost = "0.14"
+prost-reflect = { version = "0.16", features = ["serde"] }
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"

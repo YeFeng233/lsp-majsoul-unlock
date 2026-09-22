@@ -1,0 +1,39 @@
+[package]
+name = "native_bot"
+version = "0.1.0"
+edition = "2021"
+description = "Built-in, libriichi-free mahjong bot for Akagi: shared obs/action codec, BC-trained CNN inference (candle), and a training-data extractor."
+# Matches the workspace root's LICENSE.txt / NOTICE. This crate is original work
+# built on riichienv-core (Apache-2.0); it derives from no copyleft source.
+license = "Apache-2.0"
+
+[lib]
+name = "native_bot"
+
+[[bin]]
+name = "extract"
+path = "src/bin/extract.rs"
+required-features = ["extract"]
+
+[features]
+# `infer` pulls in candle + safetensors for the neural-net inference path.
+# The obs/action codec do NOT need it, so keep it optional for a lean build.
+default = ["infer"]
+infer = ["dep:candle-core", "dep:candle-nn", "dep:safetensors"]
+# `extract` gates the offline training-data extractor binary (flate2 + rayon).
+extract = ["dep:rayon"]
+
+[dependencies]
+riichienv-core = "0.4.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+flate2 = "1"
+rayon = { version = "1", optional = true }
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+safetensors = { version = "0.6", optional = true }
+
+[dev-dependencies]
+flate2 = "1"
+serde_json = "1"

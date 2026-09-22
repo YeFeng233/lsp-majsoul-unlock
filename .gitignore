@@ -9,6 +9,8 @@ app/src/main/jniLibs/
 # lockfile is what makes a release build reproducible.
 rust/majsoul-jni/target/
 hook-probe/rust-modder/target/
+hook-probe/rust-ai/target/
+hook-probe/akagi-core/target/
 external/hev-socks5-tunnel/libs/
 external/hev-socks5-tunnel/obj/
 .DS_Store

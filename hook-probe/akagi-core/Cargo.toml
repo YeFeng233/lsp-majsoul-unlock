@@ -1,0 +1,25 @@
+[package]
+name = "akagi-mobile-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+native_bot = { path = "../../external/Akagi/native_bot" }
+prost = "0.14"
+prost-reflect = { version = "0.16", features = ["serde"] }
+riichienv-core = "=0.4.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3.18"
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+# Upstream trace calls can contain complete game packets. The mobile build
+# does not install a subscriber and compiles these calls out entirely.
+tracing = { version = "0.1", features = ["max_level_off", "release_max_level_off"] }
+
+[build-dependencies]
+prost-build = "0.14"

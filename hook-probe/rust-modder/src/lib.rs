@@ -2,6 +2,7 @@
 
 mod proto;
 mod settings;
+mod capture;
 
 use std::{
     collections::HashMap,
@@ -303,6 +304,11 @@ pub unsafe extern "C" fn majmax_modder_init(config_dir: *const c_char) -> c_int 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn majmax_capture_configure(manager_uid: u32) {
+    capture::configure(manager_uid);
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn majmax_modder_process(
     connection: usize,
     from_client: bool,
@@ -323,6 +329,9 @@ pub unsafe extern "C" fn majmax_modder_process(
         } else {
             unsafe { slice::from_raw_parts(data, len) }
         };
+        // Copy before modification and before the unlock feature's enabled
+        // check. Locally injected cosmetic notifications never reach here.
+        capture::publish(connection, u8::from(from_client), input);
         core.lock()
             .map_err(|_| ())
             .map(|mut guard| guard.process(connection, from_client, input))
@@ -430,6 +439,7 @@ pub unsafe extern "C" fn majmax_modder_update_settings(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn majmax_modder_forget_connection(connection: usize) {
+    capture::publish(connection, 2, &[]);
     let Some(core) = CORE.get() else {
         return;
     };
