@@ -121,8 +121,9 @@ jobs:
           APK="hook-probe/build/outputs/apk/debug/MajsoulHookProbe-debug.apk"
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 "$APK"
           CERTS="$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK")"
-          grep -qi '375638284d8b7d9889ab3c0ed7afd0d597d2c648144813bb4936f37daa665c0f' <<< "$CERTS"
-          printf '%s\n' "$CERTS" | grep 'certificate SHA-256 digest:'
+          ACTUAL_SHA256="$(awk -F': ' '/certificate SHA-256 digest:/ {print $2; exit}' <<< "$CERTS" | tr -d '[:space:]:' | tr 'A-F' 'a-f')"
+          echo "APK signing certificate SHA-256: $ACTUAL_SHA256"
+          test "$ACTUAL_SHA256" = '375638284d8b7d9889ab3c0ed7afd0d597d2c648144813bb4936f37daa665c0f'
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
