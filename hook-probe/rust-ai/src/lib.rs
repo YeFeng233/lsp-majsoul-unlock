@@ -76,15 +76,25 @@ impl Assistant {
             self.input_pending = true;
             return Ok(Some(self.render()?));
         }
-        if parsed.events.is_empty() { return Ok(None); }
+        if parsed.events.is_empty() {
+            if self.active == Some(connection) && method == ".lq.ActionPrototype" &&
+                parsed.parsed.as_ref().unwrap().args.pointer("/payload/name").and_then(Value::as_str) != Some("ActionMJStart") {
+                return Ok(Some(self.invalidate("遇到未支持的牌局事件，已暂停建议")));
+            }
+            return Ok(None);
+        }
         if self.active != Some(connection) && !parsed.events.iter().any(|e|
             matches!(e, MjaiEvent::StartGame { id: Some(_), .. })) {
             return Ok(None);
         }
         self.input_pending = false;
         for event in parsed.events {
-            if let MjaiEvent::StartGame { id: Some(seat), num_players, .. } = &event {
+            if let MjaiEvent::StartGame { id: Some(seat), num_players, game_meta, .. } = &event {
                 anyhow::ensure!((3..=4).contains(num_players) && seat < num_players, "invalid seat");
+                if game_meta.as_ref().and_then(|meta| meta.match_mode)
+                    .is_some_and(|mode| !matches!(mode, 1 | 2 | 11 | 12)) {
+                    return Ok(Some(self.invalidate("当前特殊玩法暂不支持本地分析")));
+                }
                 self.active = Some(connection);
             }
             if self.active == Some(connection) { self.feed(&event)?; }

@@ -1,6 +1,7 @@
 package com.yefeng.majmax.hookprobe.manager
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -49,7 +50,8 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
     fun update(value: JSONObject) {
         result = value
         title?.text = if (collapsed) "AI" else if (value.optString("status") == "demo") "本地自检 · 样例" else "雀魂 · 本地 AI"
-        renderBody()
+        if (!settings) renderBody()
+        root?.post { clampPosition(); root?.let { runCatching { windows.updateViewLayout(it, layout) } } }
     }
     fun close() {
         root?.let { runCatching { windows.removeView(it) } }
@@ -59,7 +61,9 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
 
     private fun dp(value: Int) = (value * context.resources.displayMetrics.density).roundToInt()
     private fun background() = GradientDrawable().apply {
-        setColor(Color.argb((255 * opacity / 100f).roundToInt(), 15, 30, 25))
+        // GradientDrawable also has an `opacity` property (PixelFormat), so
+        // explicitly use our saved percentage rather than its receiver value.
+        setColor(Color.argb((255 * this@AiFloatingWindow.opacity / 100f).roundToInt(), 15, 30, 25))
         cornerRadius = dp(if (collapsed) 24 else 18).toFloat()
         setStroke(dp(1), Color.argb(110, 139, 201, 164))
     }
@@ -98,7 +102,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         makeDraggable(caption) { if (collapsed) { collapsed = false; save(); rebuild() } }
         if (!collapsed) {
             heading.addView(action("调节", "调节透明度和宽度") { settings = !settings; rebuild() })
-            heading.addView(action("收纳", "收纳成浮标") { collapsed = true; save(); rebuild() })
+            heading.addView(action("收纳", "收纳成浮标") { collapsed = true; settings = false; save(); rebuild() })
             heading.addView(action("×", "关闭 AI 助手", stop))
         }
         panel.addView(heading)
@@ -129,10 +133,10 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         val content = body ?: return
         content.removeAllViews()
         if (settings) {
-            addSlider(content, "背景透明度", 25, 95, opacity, { "不透明度 $it%" }) {
+            addSlider(content, "背景不透明度", 25, 95, opacity, { "$it%" }) {
                 opacity = it; root?.background = background(); save()
             }
-            addSlider(content, "窗口宽度", 220, 420, width, { "$it dp" }) {
+            addSlider(content, "窗口宽度", 220, 420, width, { "$it dp" }, live = false) {
                 width = it
                 layout.width = dp(width).coerceAtMost(context.resources.displayMetrics.widthPixels - dp(12))
                 clampPosition()
@@ -175,16 +179,25 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
             content.addView(label((if (i == 0) "推荐  " else "备选  ") + name,
                 if (i == 0) 23f else 16f, if (i == 0) green else Color.WHITE, true))
             if (kind == "discard" || kind == "riichi") {
-                discardResult(analysis, tile)?.let { hand -> content.addView(label(handDescription(hand), 12f, muted)) }
                 val index = tileIndex(tile)
                 val risks = analysis.optJSONArray("mixed_risk")
-                if (index >= 0 && risks != null && index < risks.length()) {
-                    content.addView(label("放铳风险指数  ${number(risks.optDouble(index))}", 12f, muted))
+                val risk = if (index >= 0 && risks != null && index < risks.length()) number(risks.optDouble(index)) else "—"
+                val hand = discardResult(analysis, tile)
+                if (i == 0) {
+                    if (hand != null) content.addView(label(handDescription(hand), 12f, muted))
+                    content.addView(label("放铳风险指数  $risk", 12f, muted))
+                } else {
+                    val chance = if (hand?.optInt("shanten") == 0) "估计和率 ${number(hand.optDouble("avg_agari_rate"))}%"
+                        else "${hand?.optInt("shanten") ?: "—"}向听"
+                    content.addView(label("$chance · 风险 $risk", 11f, muted))
                 }
             }
         }
         val defence = analysis.optString("best_defence_discard").takeUnless { it == "null" || it.isBlank() }
-        if (defence != null && rows.length() > 0) content.addView(label("防守参考  ${tileName(defence)}", 12f, muted))
+        val mixed = analysis.optJSONArray("mixed_risk") ?: JSONArray()
+        if (defence != null && rows.length() > 0 && (0 until mixed.length()).any { mixed.optDouble(it) > 0.0 }) {
+            content.addView(label("防守参考  ${tileName(defence)}", 12f, muted))
+        }
         val opponents = analysis.optJSONArray("opponents") ?: JSONArray()
         val riichiSeats = (0 until opponents.length()).map { opponents.getJSONObject(it) }
             .filter { it.optBoolean("is_riichi") }.map { relativeSeat(it.optInt("seat"), result.optInt("seat"), result.optInt("players", 4)) }
@@ -195,19 +208,21 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
     }
 
     private fun addSlider(parent: LinearLayout, name: String, min: Int, max: Int, value: Int,
-        format: (Int) -> String, change: (Int) -> Unit) {
+        format: (Int) -> String, live: Boolean = true, change: (Int) -> Unit) {
         val caption = label("$name · ${format(value)}", 12f, muted)
         parent.addView(caption)
         parent.addView(SeekBar(context).apply {
             this.max = max - min
             progress = value - min
             contentDescription = name
+            thumbTintList = ColorStateList.valueOf(green)
+            progressTintList = ColorStateList.valueOf(green)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) { caption.text = "$name · ${format(progress + min)}"; change(progress + min) }
+                    if (fromUser) { caption.text = "$name · ${format(progress + min)}"; if (live) change(progress + min) }
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) { if (!live && seekBar != null) change(seekBar.progress + min) }
             })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
     }

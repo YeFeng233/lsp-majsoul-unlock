@@ -8,6 +8,8 @@
 
 更新页使用构建时的 `updateOwner`、`updateRepo` 和 `updateChannel` Gradle 属性生成 `UPDATE_OWNER`、`UPDATE_REPO` 和 `UPDATE_CHANNEL`。默认更新源已配置为 `YeFeng233/lsp-majsoul-unlock` 的 GitHub Releases，应用启动时自动检查一次，更新页也提供手动检查按钮。正式发布使用 `v*` 标签，并随 APK 发布 `hook-update.json` 元数据；检查只接受非草稿、非预发布的稳定 Release。独立应用的界面与发布计划见 [`docs/HOOK_MANAGER_UI_DESIGN.md`](../docs/HOOK_MANAGER_UI_DESIGN.md)。
 
+管理应用还提供基于 Akagi 轻量模型的安卓本地牌局助手，支持可调节透明度、宽度、位置和收纳状态的悬浮窗。实时 Hook 路径、指标说明、隐私边界和验证范围见 [`docs/LOCAL_AI_OVERLAY.md`](../docs/LOCAL_AI_OVERLAY.md)。
+
 本阶段已完成管理应用外壳、图标资源、主题、导航、概览状态空态、管理侧日志搜索与级别筛选，以及 GitHub Releases 手动和启动自动更新检查。游戏侧结构化诊断文件、root 只读适配器仍按设计文档的后续阶段实现；不会为了让页面显示绿色状态而伪造游戏进程事件。
 
 当前实现已在 Android 17 ARM64、LSPosed IT 2.2.0-it (7888)、游戏 `4.0.16_MC` / 222 上实测。登录到大厅时已观察到双向字节数组替换，游戏公告中显示 `雀魂Max-rs载入成功` / `0.7.0`。房间、观战和完整对局流程尚未覆盖。

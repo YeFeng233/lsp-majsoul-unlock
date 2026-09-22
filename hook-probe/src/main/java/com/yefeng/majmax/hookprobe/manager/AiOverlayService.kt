@@ -156,6 +156,7 @@ class AiOverlayService : Service() {
     private fun consume() {
         var last = JSONObject().put("status", "waiting").put("message", "等待牌局")
         try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             AiNative.reset()
             while (alive.get()) {
                 val packet = queue.take()
@@ -174,7 +175,7 @@ class AiOverlayService : Service() {
         } catch (_: InterruptedException) {
             // Normal service shutdown.
         } catch (_: Throwable) {
-            val failed = JSONObject().put("status", "error").put("message", "本地引擎加载失败，请重新开启助手")
+            val failed = JSONObject().put("status", "error").put("message", "本地引擎加载失败，请停止助手并重启管理应用")
             post(failed, epoch.get(), revision.get())
         }
     }
