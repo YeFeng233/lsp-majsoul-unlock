@@ -1,0 +1,60 @@
+name: Update Liqi Files
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # Run every Sunday at midnight UTC
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  update-liqi:
+    permissions:
+      pull-requests: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest MajsoulData release
+        id: majsouldata
+        uses: pozetroninc/github-action-get-latest-release@master
+        with:
+          repository: Avenshy/MajsoulData
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read current version
+        id: current_version
+        run: echo "version=$(jq -r .liqiVersion liqi_config/settings.json)" >> $GITHUB_OUTPUT
+
+      - name: Compare versions
+        id: compare_versions
+        run: |
+          if [ "${{ steps.majsouldata.outputs.release }}" != "${{ steps.current_version.outputs.version }}" ]; then
+            echo "update_needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "update_needed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update data files
+        if: steps.compare_versions.outputs.update_needed == 'true'
+        run: |
+          python -m pip install protobuf requests
+          python tools/update_proto.py --token "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Create Pull Request
+        if: steps.compare_versions.outputs.update_needed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: Update Liqi files to ${{ steps.majsouldata.outputs.release }}
+          title: Update Liqi files to ${{ steps.majsouldata.outputs.release }}
+          body: |
+            This PR updates the Liqi files to the latest version (${{ steps.majsouldata.outputs.release }}) from [MajsoulData](https://github.com/Avenshy/MajsoulData).
+
+            Changes:
+            - Updated liqi.desc
+            - Updated liqi.json
+            - Updated max_data.yaml
+            - Updated version in settings.json
+          branch: update-liqi-files
+          base: master

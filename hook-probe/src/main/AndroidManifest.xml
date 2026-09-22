@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <package android:name="com.soulgamechst.majsoul" />
+    </queries>
+    <application
+        android:allowBackup="false"
+        android:description="@string/module_description"
+        android:icon="@drawable/app_icon"
+        android:label="@string/module_name"
+        android:roundIcon="@drawable/app_icon"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MajsoulHook">
+        <activity
+            android:name=".manager.MainActivity"
+            android:exported="true"
+            android:screenOrientation="unspecified">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

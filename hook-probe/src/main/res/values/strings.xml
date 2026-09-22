@@ -1,0 +1,4 @@
+<resources>
+    <string name="module_name">雀魂 Max Hook</string>
+    <string name="module_description">API 102 + IL2CPP 原生 Hook + Rust Modder</string>
+</resources>

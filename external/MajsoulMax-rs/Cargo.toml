@@ -1,0 +1,46 @@
+[package]
+name = "majsoul_max_rs"
+version = "0.7.0"
+edition = "2024"
+
+[lib]
+
+[[bin]]
+name = "majsoul_max_rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { version = "1", default-features = false }
+base64 = { version = "0.22", default-features = false }
+bytes = { version = "1", default-features = false }
+prost-reflect = { version = "0.16", features = ["serde"] }
+# 0.13 起 rustls-tls 拆成 rustls + 证书源；0.12 的 rustls-tls 等价于二者之和
+reqwest = { version = "0.13", features = [
+    "rustls",
+    "webpki-roots",
+    "json",
+], default-features = false }
+serde_json = "1"
+# derive/std 原先靠其他依赖的特性合并偶然带入，显式声明避免依赖树一变就炸
+serde = { version = "1", features = ["derive", "std"], default-features = false }
+tokio = { version = "1", features = ["fs", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = [
+    "chrono",
+    "env-filter",
+    "fmt",
+], default-features = false }
+tracing = { version = "0.1", default-features = false }
+prost = { version = "0.14", default-features = false }
+hudsucker = { version = "0.25", features = [
+    "rcgen-ca",
+    "rustls-client",
+], default-features = false }
+const_format = "0.2"
+rand = { version = "0.10", features = ["thread_rng"], default-features = false }
+url = { version = "2", features = ["serde"], default-features = false }
+
+[build-dependencies]
+prost = { version = "0.14", default-features = false }
+prost-build = { version = "0.14", default-features = false }
+prost-types = "0.14"
