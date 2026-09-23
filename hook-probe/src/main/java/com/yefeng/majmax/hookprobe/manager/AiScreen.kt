@@ -49,7 +49,7 @@ internal fun AiScreen(padding: PaddingValues) {
     var showLicense by remember { mutableStateOf(false) }
     var fourModel by remember { mutableStateOf(OnnxModelStore.info(context, 4)) }
     var threeModel by remember { mutableStateOf(OnnxModelStore.info(context, 3)) }
-    var modelMessage by remember { mutableStateOf("模型文件仅保存在本机；当前 ONNX 只替换策略 logits，和牌率、向听与放铳风险仍由 Akagi 分析计算。") }
+    var modelMessage by remember { mutableStateOf("仅接受符合 Akagi 策略协议的 ONNX 文件；PyTorch/Mortal 权重包不能只改后缀导入。模型仅保存在本机；和牌率、向听与放铳风险仍由 Akagi 分析计算。") }
     val scope = rememberCoroutineScope()
     val status by AiStatus.state.collectAsStateWithLifecycle()
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}

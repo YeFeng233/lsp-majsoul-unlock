@@ -100,19 +100,29 @@ internal object OnnxModelStore {
         val staged = File(parent, "policy.onnx")
         val digest = MessageDigest.getInstance("SHA-256")
         var bytes = 0L
+        var rejectionReason = "import_failed"
         try {
             val input = checkNotNull(context.contentResolver.openInputStream(uri)) { "无法读取所选文件" }
-            input.use { source -> staged.outputStream().buffered().use { output ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val count = source.read(buffer)
-                    if (count < 0) break
-                    bytes += count
-                    require(bytes <= MAX_BYTES) { "模型文件超过 128 MiB 限制" }
-                    digest.update(buffer, 0, count)
-                    output.write(buffer, 0, count)
+            input.buffered().use { source ->
+                source.mark(4)
+                val signature = IntArray(4) { source.read() }
+                source.reset()
+                if (isZipArchive(signature)) {
+                    rejectionReason = "zip_archive"
+                    throw IllegalArgumentException("文件内容是 ZIP 压缩包，不是可直接加载的 ONNX 模型；PyTorch 权重不能只改后缀，请导出兼容 Akagi 策略协议的 .onnx 文件")
                 }
-            } }
+                staged.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        bytes += count
+                        require(bytes <= MAX_BYTES) { "模型文件超过 128 MiB 限制" }
+                        digest.update(buffer, 0, count)
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
             require(bytes > 0) { "模型文件为空" }
             rejectExternalWeights(staged)
             val validation = validate(staged)
@@ -138,13 +148,20 @@ internal object OnnxModelStore {
                 org.json.JSONObject().put("count", players).put("reason", hash.take(12)))
             return ImportedPolicy(players, validation.second.ifBlank { displayName }.take(64), bytes, hash)
         } catch (error: Throwable) {
-            DiagnosticsStore.appendAssistant(context, "ERROR", "assistant.model", "MODEL_IMPORT_REJECTED")
+            DiagnosticsStore.appendAssistant(context, "ERROR", "assistant.model", "MODEL_IMPORT_REJECTED",
+                org.json.JSONObject().put("reason", rejectionReason))
             throw error
         } finally {
             staged.delete()
             parent.delete()
         }
     }
+
+    private fun isZipArchive(signature: IntArray): Boolean =
+        signature[0] == 0x50 && signature[1] == 0x4b &&
+            ((signature[2] == 0x03 && signature[3] == 0x04) ||
+                (signature[2] == 0x05 && signature[3] == 0x06) ||
+                (signature[2] == 0x07 && signature[3] == 0x08))
 
     /** JNI calls this on the assistant worker thread. A null result means use the bundled Candle model. */
     @JvmStatic
