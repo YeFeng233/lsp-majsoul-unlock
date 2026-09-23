@@ -1,6 +1,6 @@
 # Export an Akagi policy as a local ONNX model
 
-The Android assistant accepts one self-contained ONNX file per player count. Its contract is documented in [FEATURE_UPGRADE_DESIGN.md](../docs/FEATURE_UPGRADE_DESIGN.md): input `obs`, output `logits`, fixed four-player or three-player dimensions, and the `akagi-policy-v1` metadata.
+The Android assistant accepts one self-contained ONNX file per player count. The `akagi-policy-v1` contract requires a float32 input named `obs` and a float32 output named `logits`. Four-player shapes are `[1,39,34]` and `[1,82]`; three-player shapes are `[1,37,27]` and `[1,60]`. The model metadata must contain `majmax.contract=akagi-policy-v1`, `majmax.players=4` or `3`, `majmax.obs_schema=1`, and `majmax.action_codec=riichienv-core-0.4.8`. Features use Akagi native_bot's channel-major observation encoder and its matching action codec.
 
 Install Python dependencies `torch`, `safetensors`, `onnx`, `onnxruntime`, and `numpy`. From the repository root, export either bundled model:
 

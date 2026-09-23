@@ -1,30 +1,29 @@
+# Local Android and IDE state
 .gradle/
-build/
-local.properties
-.idea/
-*.iml
-.cxx/
-app/src/main/jniLibs/
-# Cargo.lock is deliberately NOT ignored: majsoul-jni is a binary crate, so the
-# lockfile is what makes a release build reproducible.
-rust/majsoul-jni/target/
-hook-probe/rust-modder/target/
-hook-probe/rust-ai/target/
-hook-probe/akagi-core/target/
-external/hev-socks5-tunnel/libs/
-external/hev-socks5-tunnel/obj/
-.DS_Store
-release-assets/
-
-# Local build caches, logs, and signing credentials
 .gradle-user-home/
 .gradle-user/
+.kotlin/
 .android/
 .android-user/
-*.log
-ci-keystore.jks
-*.keystore
-.signing/
+.idea/
+*.iml
+local.properties
+.cxx/
 
-# The upstream proxy CA private key is not required by the Android hook.
+# Generated builds and local downloads
+build/
+target/
+release-assets/
+*.apk
+*.onnx
+*.pth
+*.pt
+*.pte
+*.log
+.DS_Store
+
+# Signing material and the upstream proxy CA key are never source files.
+.signing/
+*.keystore
+*.jks
 external/MajsoulMax-rs/src/ca/hudsucker.key
