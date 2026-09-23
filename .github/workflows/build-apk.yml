@@ -46,8 +46,11 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protobuf compiler and Lua test runtime
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler lua5.1
+
+      - name: Test Android emoji compatibility
+        run: lua5.1 tools/tests/test_emoji_compat.lua
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

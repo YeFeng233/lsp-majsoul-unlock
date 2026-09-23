@@ -7,7 +7,7 @@
 -- a missing optional UI bundle from changing the original settings window.
 local M = rawget(_G, "__majmax_settings_page") or {}
 
-M.version = "0.4.3"
+M.version = "0.7.1"
 M.labels = {
     traditional = {
         title = "MOD設置",
@@ -117,6 +117,84 @@ function M.update(patch)
     local result, error_message = decode(__majmax_update_settings(encoded))
     if result and result.error then return nil, result.error end
     return result, error_message
+end
+
+-- Current Android clients send global emo_id values and wait for a server
+-- broadcast before rendering. A locally substituted character can therefore
+-- lose even its default emojis: the server rejects the ID with code 2208.
+-- Keep the real request/response intact and render only that rejection locally.
+function M.installEmojiHook()
+    local network = rawget(_G, "MJNetMgr")
+    if M.emojiHookInstalled or not network or type(network.SendRequest) ~= "function" then
+        return M.emojiHookInstalled or false
+    end
+    local original = network.SendRequest
+    network.SendRequest = function(self, service, method, request, callback, ...)
+        if service ~= "FastTest" or method ~= "broadcastInGame" then
+            return original(self, service, method, request, callback, ...)
+        end
+        local desktop = rawget(_G, "DesktopMgr") and DesktopMgr.Inst
+        local view = rawget(_G, "UI_DesktopInfo") and UI_DesktopInfo.Inst
+        local payload = request and type(request.content) == "string" and decode(request.content)
+        local emoji_id = type(payload) == "table" and payload.emo_id
+        if type(emoji_id) ~= "number" or emoji_id <= 0 or emoji_id > 4294967295
+                or emoji_id ~= math.floor(emoji_id) or not desktop or not view then
+            return original(self, service, method, request, callback, ...)
+        end
+        local seat = desktop.seat
+        local game_uuid = self.game_uuid
+        local player = desktop.player_datas and desktop.player_datas[seat]
+        local character_id = player and player.character and player.character.charid
+        local handled = false
+        local function local_fallback()
+            -- A late callback must never display in another game or after the
+            -- feature has been disabled. Settings are read at callback time.
+            if DesktopMgr.Inst ~= desktop or UI_DesktopInfo.Inst ~= view
+                    or self.game_uuid ~= game_uuid or desktop.seat ~= seat
+                    or desktop.game_end_result or self.is_ob then return end
+            local current_player = desktop.player_datas and desktop.player_datas[seat]
+            if not current_player or not current_player.character
+                    or current_player.character.charid ~= character_id then return end
+            local snapshot = M.snapshot()
+            if not snapshot or not snapshot.activeEnabled or not snapshot.settings
+                    or not snapshot.settings.enabled or not snapshot.settings.emojiSwitch then return end
+            local emoji = rawget(_G, "EmojiMgr")
+            if not emoji or type(emoji.IsEmojiAllowed) ~= "function" or not emoji.IsEmojiAllowed()
+                    or type(emoji.GetCharEmojiIds) ~= "function"
+                    or type(emoji.GetSingleEmojiData) ~= "function"
+                    or type(view._onShowEmo) ~= "function"
+                    or type(desktop.seat2LocalPosition) ~= "function"
+                    or desktop:seat2LocalPosition(seat) ~= 1 then return end
+            local belongs_to_character = false
+            for _, id in ipairs(emoji.GetCharEmojiIds(character_id) or {}) do
+                if id == emoji_id then belongs_to_character = true; break end
+            end
+            if not belongs_to_character or not emoji.GetSingleEmojiData(emoji_id, character_id) then return end
+            view:_onShowEmo(1, emoji_id, nil)
+            log("emoji local fallback id=" .. tostring(emoji_id) .. " serverCode=2208")
+        end
+        local function on_response(error, response, ...)
+            local code = response and response.error and response.error.code
+            if not handled then
+                handled = true
+                -- No fallback for transport failures, rate limits, or successful
+                -- sends (their normal broadcast must not be shown twice).
+                if not error and code == 2208 then
+                    local ok = pcall(local_fallback)
+                    if not ok then log("emoji local fallback unavailable") end
+                end
+                if error or (code and code ~= 0) then
+                    log("emoji response id=" .. tostring(emoji_id) .. " code=" .. tostring(code)
+                        .. " transportError=" .. tostring(error ~= nil and error ~= false))
+                end
+            end
+            if callback then return callback(error, response, ...) end
+        end
+        return original(self, service, method, request, on_response, ...)
+    end
+    M.emojiHookInstalled = true
+    log("emoji compatibility hook installed")
+    return true
 end
 
 local function lower(value)
@@ -661,6 +739,7 @@ function M.attach(adapter)
 end
 
 function M.bootstrap()
+    M.installEmojiHook()
     if M.attached then return true end
     if not M.started then
         M.started = true
