@@ -37,4 +37,4 @@ rustup target add aarch64-linux-android
 
 ## 来源与许可
 
-MOD 消息处理代码来自 [MajsoulMax-rs](https://github.com/Xerxes-2/MajsoulMax-rs)，牌局状态、分析和内置模型来自 [Akagi](https://github.com/shinkuan/Akagi)。本仓库保留了构建需要的上游文件及其许可证；具体来源见 [MajsoulMax-rs 来源说明](external/MajsoulMax-rs/UPSTREAM.md) 和 [Akagi 来源说明](external/Akagi/UPSTREAM.md)。Akagi 内置模型不是 Mortal 模型。
+本项目采用 GNU GPL v3 开源，完整协议见根目录的 [LICENSE](LICENSE)。MOD 消息处理代码来自 [MajsoulMax-rs](https://github.com/Xerxes-2/MajsoulMax-rs)，牌局状态、分析和内置模型来自 [Akagi](https://github.com/shinkuan/Akagi)。这些第三方文件保留各自的原始许可与声明；具体来源见 [MajsoulMax-rs 来源说明](external/MajsoulMax-rs/UPSTREAM.md)、[Akagi 来源说明](external/Akagi/UPSTREAM.md) 以及 Akagi 的 [LICENSE.txt](external/Akagi/LICENSE.txt) 和 [NOTICE](external/Akagi/NOTICE)。Akagi 内置模型不是 Mortal 模型。
