@@ -71,9 +71,12 @@ class AiOverlayService : Service() {
     private var reader: Thread? = null
     private var worker: Thread? = null
     private var overlay: AiFloatingWindow? = null
+    @Volatile private var fallbackLogged = false
 
     override fun onCreate() {
         super.onCreate()
+        OnnxModelStore.initialize(this)
+        DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "SERVICE_STARTED")
         val notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel("local-ai", "本地牌局助手",
             NotificationManager.IMPORTANCE_LOW))
@@ -100,6 +103,7 @@ class AiOverlayService : Service() {
         demoMode.set(intent?.action == DEMO)
         runCatching {
             grantUriPermission(GAME, ENDPOINT_URI, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            DiagnosticsAccess.grantToGame(this)
         }
         // A mode change has its own generation. Previously queued results may
         // never overwrite the self-test label or a new live session.
@@ -142,6 +146,7 @@ class AiOverlayService : Service() {
                     authenticated = true
                     client = socket
                     connected = true
+                    DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "GAME_HOOK_CONNECTED")
                     if (!demoMode.get()) reset("Hook 已连接，等待进入牌局；中途开启请重新进入")
                     socket.soTimeout = 8_000
                     var sourceGeneration: Long? = null
@@ -173,6 +178,7 @@ class AiOverlayService : Service() {
                     if (authenticated) {
                         client = null
                         connected = false
+                        DiagnosticsStore.appendAssistant(this, "WARN", "assistant.service", "GAME_HOOK_DISCONNECTED")
                         if (alive.get() && !demoMode.get()) reset("游戏连接已断开，等待重新同步")
                     }
                 }
@@ -189,6 +195,8 @@ class AiOverlayService : Service() {
         try {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             AiNative.reset()
+            OnnxModelStore.prepareSelected(this)
+            AiNative.configurePolicy(OnnxModelStore.enabledMask(this))
             while (alive.get()) {
                 val packet = queue.take()
                 if (packet.epoch != epoch.get()) continue
@@ -198,7 +206,13 @@ class AiOverlayService : Service() {
                     else -> AiNative.frame(packet.connection, packet.kind, packet.bytes)
                 }
                 if (packet.epoch != epoch.get()) continue
-                if (result != null) last = JSONObject(result)
+                if (result != null) {
+                    last = JSONObject(result)
+                    if (last.optBoolean("modelFallback") && !fallbackLogged) {
+                        fallbackLogged = true
+                        DiagnosticsStore.appendAssistant(this, "ERROR", "assistant.model", "MODEL_RUNTIME_FALLBACK")
+                    }
+                }
                 // Process every event, but present only the latest state after
                 // a burst; stale inference is never posted over newer input.
                 if (queue.isEmpty()) post(last, packet.epoch, packet.revision)
@@ -237,6 +251,7 @@ class AiOverlayService : Service() {
         overlay?.close()
         runCatching { revokeUriPermission(ENDPOINT_URI, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         AiStatus.mutable.value = AiServiceStatus()
+        DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "SERVICE_STOPPED")
         super.onDestroy()
     }
 

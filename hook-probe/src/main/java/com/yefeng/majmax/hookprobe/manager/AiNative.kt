@@ -7,6 +7,7 @@ object AiNative {
         System.loadLibrary("majsoulai_jni")
     }
     @JvmStatic external fun reset()
+    @JvmStatic external fun configurePolicy(mask: Int)
     @JvmStatic external fun frame(connection: Long, direction: Int, bytes: ByteArray): String?
     @JvmStatic external fun selfTest(): String
 }

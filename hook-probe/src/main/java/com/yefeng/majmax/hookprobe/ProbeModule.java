@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import org.json.JSONObject;
 
 import io.github.libxposed.api.XposedModule;
 
@@ -52,13 +53,17 @@ public final class ProbeModule extends XposedModule {
     public void onModuleLoaded(ModuleLoadedParam param) {
         targetProcess = !param.isSystemServer() && GAME.equals(param.getProcessName());
         if (!targetProcess) return;
+        HookDiagnostics.event("INFO", "hook.entry", "MODULE_LOADED",
+                HookDiagnostics.fields("api", getApiVersion(), "moduleVersion", "0.6.0"));
         log(Log.INFO, TAG, "API=" + getApiVersion() + " framework="
                 + getFrameworkName() + " " + getFrameworkVersion());
         try {
             System.loadLibrary("majsoulmodder");
             System.loadLibrary("majsoulprobe");
+            HookDiagnostics.event("INFO", "hook.native", "NATIVE_LOADED", new JSONObject());
             log(Log.INFO, TAG, "Native Hook and Rust Modder loaded");
         } catch (Throwable error) {
+            HookDiagnostics.event("ERROR", "hook.native", "NATIVE_LOAD_FAILED", new JSONObject());
             log(Log.ERROR, TAG, "Cannot load native Hook libraries", error);
         }
     }
@@ -77,14 +82,18 @@ public final class ProbeModule extends XposedModule {
                 if (receiver instanceof Context context) configure(context);
                 return chain.proceed();
             });
+            HookDiagnostics.event("INFO", "hook.entry", "ACTIVITY_HOOK_INSTALLED", new JSONObject());
             log(Log.INFO, TAG, "Game activity API 102 initialization hook installed");
         } catch (ReflectiveOperationException error) {
+            HookDiagnostics.event("ERROR", "hook.entry", "ACTIVITY_HOOK_FAILED", new JSONObject());
             log(Log.ERROR, TAG, "Activity entry changed; Rust Modder cannot be configured", error);
         }
     }
 
     private void configure(Context gameContext) {
         if (!CONFIGURED.compareAndSet(false, true)) return;
+        HookDiagnostics.start(gameContext);
+        HookDiagnostics.event("INFO", "hook.entry", "CONFIG_STARTED", new JSONObject());
         try {
             File configDir = new File(gameContext.getFilesDir(), "majsoulmax-hook");
             if (!configDir.isDirectory() && !configDir.mkdirs()) {
@@ -103,9 +112,11 @@ public final class ProbeModule extends XposedModule {
             int result = nativeConfigure(configDir.getAbsolutePath());
             if (result != 0) throw new IOException("nativeConfigure returned " + result);
             startAiEndpointDiscovery(gameContext.getApplicationContext());
+            HookDiagnostics.event("INFO", "hook.entry", "CONFIGURED", new JSONObject());
             log(Log.INFO, TAG, "Rust Modder configured at " + configDir);
         } catch (Throwable error) {
             CONFIGURED.set(false);
+            HookDiagnostics.event("ERROR", "hook.entry", "CONFIG_FAILED", new JSONObject());
             log(Log.ERROR, TAG, "Cannot configure Rust Modder; traffic remains unmodified", error);
         }
     }
@@ -121,12 +132,14 @@ public final class ProbeModule extends XposedModule {
                 if (port > 0 && port <= 65535 && token != null && token.length == 32) {
                     if (port != aiEndpointPort || !Arrays.equals(token, aiEndpointToken)) {
                         nativeCaptureEndpoint(port, token);
+                        HookDiagnostics.event("INFO", "hook.capture", "CAPTURE_ENDPOINT_READY", new JSONObject());
                         Arrays.fill(aiEndpointToken, (byte) 0);
                         aiEndpointPort = port;
                         aiEndpointToken = token.clone();
                     }
                 } else if (aiEndpointPort != 0) {
                     nativeCaptureEndpoint(0, new byte[0]);
+                    HookDiagnostics.event("INFO", "hook.capture", "CAPTURE_ENDPOINT_LOST", new JSONObject());
                     Arrays.fill(aiEndpointToken, (byte) 0);
                     aiEndpointPort = 0;
                     aiEndpointToken = new byte[0];
@@ -134,6 +147,7 @@ public final class ProbeModule extends XposedModule {
             } catch (Throwable ignored) {
                 if (aiEndpointPort != 0) {
                     nativeCaptureEndpoint(0, new byte[0]);
+                    HookDiagnostics.event("WARN", "hook.capture", "CAPTURE_ENDPOINT_LOST", new JSONObject());
                     Arrays.fill(aiEndpointToken, (byte) 0);
                     aiEndpointPort = 0;
                     aiEndpointToken = new byte[0];

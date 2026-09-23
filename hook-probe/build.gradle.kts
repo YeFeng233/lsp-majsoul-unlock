@@ -9,6 +9,9 @@ val stagedAssets = layout.buildDirectory.dir("generated/upstreamAssets")
 val updateOwner = providers.gradleProperty("updateOwner").orElse("YeFeng233").get()
 val updateRepo = providers.gradleProperty("updateRepo").orElse("lsp-majsoul-unlock").get()
 val updateChannel = providers.gradleProperty("updateChannel").orElse("stable").get()
+val buildSha = providers.gradleProperty("buildSha")
+    .orElse(providers.environmentVariable("GITHUB_SHA").map { it.take(7) })
+    .orElse("local build").get()
 val stageUpstreamAssets by tasks.registering(Copy::class) {
     from(upstreamDir.resolve("liqi_config")) {
         include("max_data.yaml", "settings.mod.json")
@@ -45,11 +48,12 @@ android {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.5.2"
+        versionCode = 12
+        versionName = "0.6.0"
         buildConfigField("String", "UPDATE_OWNER", "\"${updateOwner.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_CHANNEL", "\"${updateChannel.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "BUILD_SHA", "\"${buildSha.replace("\"", "\\\"")}\"")
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -91,6 +95,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 

@@ -2,6 +2,12 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run the Rust protocol and local-AI test suite before building
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -49,6 +55,7 @@ jobs:
             hook-probe/rust-ai
 
       - name: Test local AI and protocol recovery
+        if: github.event_name != 'workflow_dispatch' || inputs.run_tests
         working-directory: hook-probe/rust-ai
         run: cargo test --release --locked
 
@@ -114,7 +121,30 @@ jobs:
       - name: Build APK
         env:
           ANDROID_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
-        run: ./gradlew -p hook-probe --no-daemon -PupdateOwner=YeFeng233 -PupdateRepo=lsp-majsoul-unlock -PupdateChannel=stable assembleDebug
+        run: ./gradlew -p hook-probe --no-daemon -PupdateOwner=YeFeng233 -PupdateRepo=lsp-majsoul-unlock -PupdateChannel=stable -PbuildSha="${GITHUB_SHA:0:7}" assembleDebug
+
+      - name: Verify native ELF page alignment
+        shell: bash
+        run: |
+          APK="hook-probe/build/outputs/apk/debug/MajsoulHookProbe-debug.apk"
+          LIB_DIR="$RUNNER_TEMP/majmax-apk-libs"
+          mkdir -p "$LIB_DIR"
+          unzip -q "$APK" 'lib/arm64-v8a/*.so' -d "$LIB_DIR"
+          READELF="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          python3 - "$LIB_DIR/lib/arm64-v8a" "$READELF" <<'PY'
+          import pathlib, subprocess, sys
+          library_dir, readelf = pathlib.Path(sys.argv[1]), sys.argv[2]
+          libraries = sorted(library_dir.glob('*.so'))
+          if not libraries:
+              raise SystemExit('No ARM64 shared libraries found in APK')
+          for library in libraries:
+              output = subprocess.check_output([readelf, '-lW', str(library)], text=True)
+              loads = [int(line.split()[-1], 0) for line in output.splitlines()
+                       if line.lstrip().startswith('LOAD')]
+              if not loads or min(loads) < 0x4000:
+                  raise SystemExit(f'{library.name} has incompatible PT_LOAD alignment: {loads}')
+              print(f'{library.name}: PT_LOAD alignment >= 16 KiB')
+          PY
 
       - name: Verify APK signature and alignment
         shell: bash

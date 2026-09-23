@@ -1,6 +1,8 @@
 # 日志、ONNX 自定义模型与应用信息升级设计
 
-状态：设计稿，尚未实现。基线为 `v0.5.2`（`b899340`），2026-09-23。
+状态：已按本文实现为 `v0.6.0`（versionCode 12）。设计基线为 `v0.5.2`（`b899340`），2026-09-23；目标设备验收与正式 Release 发布仍待完成。
+
+实现覆盖 Hook/助手 JSONL 双日志、Provider UID 校验与批量提交、限额轮转及 FileProvider 故障包分享；四麻/三麻独立 ONNX 导入槽位、协议校验、CPU Runtime、Rust 策略回调及内置模型回退；以及 About 对话框和构建 SHA 注入。完整 APK 构建在 GitHub Actions 进行；本机缺少已接受许可的 Android SDK 配置，未在本机验证 APK。Rust/ONNX 目标设备延迟、16 KiB ELF 检查和故障恢复仍以 Actions 与设备验收结果为准。
 
 本设计只扩展管理应用与本地助手，不改变游戏 APK，也不增加自动出牌。当前实时采集已经能经游戏 UID 校验、本机回环连接到管理进程；这一链路是诊断和模型切换的基础。旧版 [管理界面设计](HOOK_MANAGER_UI_DESIGN.md) 中“以 root 读取游戏私有日志”为当时尚未实现的方案；本设计的 Hook 日志以游戏进程主动提交结构化事件为首选实现。
 
@@ -103,6 +105,8 @@ ZIP 写入应用缓存目录的专用 `diagnostics/share/`，通过 `FileProvide
 | `AiScreen.kt`、新的 `manager/model/` | `.onnx` 文件导入、校验、模型槽位和运行状态 |
 | `rust-ai`、本地 `native_bot` 适配层、`AiNative.kt`、`ai_jni.cpp` | 策略后端抽象、ONNX logits 桥接和合法动作回退 |
 | `build.gradle.kts`、GitHub Actions | 固定 ORT 依赖、构建提交信息、APK/ELF 校验 |
+
+ONNX 导出和 Candle 对照命令见 [`tools/README_POLICY_ONNX.md`](../tools/README_POLICY_ONNX.md)。
 
 1. 先实现结构化 Hook / 助手事件及跨进程提交，再改日志页双页签和 ZIP 分享。每个写入点都要有事件代码，不能仅把现有 logcat 文本搬到 UI。
 2. 在本地适配层拆出 `PolicyBackend`，加入 ONNX 示例导出及数值一致性测试；随后接入 Android Runtime、导入校验和助手页模型选择。

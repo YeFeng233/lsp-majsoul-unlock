@@ -22,7 +22,7 @@ use riichienv_core::state_3p::GameState3P;
 use crate::action_codec::{pick_by_logits, rank_by_logits};
 use crate::adapt::{obs_and_legal_3p, obs_and_legal_4p};
 use crate::mjai_compat::{parse_line, sanitize_3p};
-use crate::model::Model;
+use crate::model::{ExternalActivateFn, ExternalInferenceFn, Model};
 
 /// How many ranked candidates the engine surfaces for the HUD's multi-row
 /// recommendation card (top-N by policy probability).
@@ -93,6 +93,8 @@ pub struct Decision {
     /// can only play `action`. Callers that pay per query (the online API) use
     /// this to answer locally instead of spending a call on a foregone move.
     pub forced: bool,
+    /// The requested custom policy failed and this decision used bundled weights.
+    pub custom_fallback: bool,
 }
 
 enum Backend {
@@ -117,6 +119,17 @@ impl Engine {
     pub fn new(model_bytes: Vec<u8>, num_players: u8, seat: u8) -> Result<Self> {
         let rule = GameRule::default_tenhou();
         let model = Model::from_safetensors(model_bytes, num_players)?;
+        Self::with_model(model, num_players, seat, rule)
+    }
+
+    pub fn new_with_external(model_bytes: Vec<u8>, num_players: u8, seat: u8,
+        callback: ExternalInferenceFn, activate: ExternalActivateFn) -> Result<Self> {
+        let rule = GameRule::default_tenhou();
+        let model = Model::from_safetensors_with_external(model_bytes, num_players, callback, activate)?;
+        Self::with_model(model, num_players, seat, rule)
+    }
+
+    fn with_model(model: Model, num_players: u8, seat: u8, rule: GameRule) -> Result<Self> {
         let backend = if num_players == 3 {
             Backend::Three {
                 state: Box::new(GameState3P::new(0, true, None, 0, rule)),
@@ -278,12 +291,22 @@ impl Engine {
 
         let candidates = build_candidates(&ranked, seat, last_discarder, drawn, reach_pai);
         let action = candidates[0].0.clone();
+        let custom_fallback = match &self.backend {
+            Backend::Four { model, .. } | Backend::Three { model, .. } => model.take_external_failure(),
+        };
         Ok(Some(Decision {
             action,
             candidates,
             logits,
             forced,
+            custom_fallback,
         }))
+    }
+
+    pub fn uses_external_policy(&self) -> bool {
+        match &self.backend {
+            Backend::Four { model, .. } | Backend::Three { model, .. } => model.uses_external(),
+        }
     }
 
     /// The tile the local model would discard if it declared riichi right now,

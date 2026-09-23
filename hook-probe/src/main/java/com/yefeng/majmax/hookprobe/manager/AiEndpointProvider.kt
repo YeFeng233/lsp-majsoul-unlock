@@ -13,7 +13,6 @@ class AiEndpointProvider : ContentProvider() {
     override fun onCreate() = true
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
-        if (method != "endpoint") return null
         val app = checkNotNull(context)
         val gameUid = try {
             app.packageManager.getApplicationInfo(AiOverlayService.GAME, 0).uid
@@ -23,6 +22,12 @@ class AiEndpointProvider : ContentProvider() {
         if (Binder.getCallingUid() != gameUid) {
             throw SecurityException("Only the target game may request the local AI endpoint")
         }
+        if (method == "hookDiagnostics") {
+            val payload = extras?.getString("records") ?: throw IllegalArgumentException("Missing diagnostics batch")
+            val ack = DiagnosticsStore.acceptHookBatch(app, payload)
+            return Bundle().apply { putLong("ackSeq", ack) }
+        }
+        if (method != "endpoint") return null
         val endpoint = AiOverlayService.currentEndpoint()
         return Bundle().apply {
             putInt("port", endpoint?.port ?: 0)
@@ -38,4 +43,12 @@ class AiEndpointProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?,
         selectionArgs: Array<out String>?): Int = 0
+}
+
+internal object DiagnosticsAccess {
+    private val uri = Uri.parse("content://com.yefeng.majmax.hookprobe.ai/capture")
+    fun grantToGame(context: android.content.Context) {
+        runCatching { context.grantUriPermission(AiOverlayService.GAME, uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    }
 }

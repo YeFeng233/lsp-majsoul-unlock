@@ -6,18 +6,22 @@ use akagi_mobile_core::{
     schema::MjaiEvent,
 };
 use native_bot::engine::{BotAction, Engine};
+use native_bot::model::{ExternalActivateFn, ExternalInferenceFn};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     ffi::{c_char, CString},
     panic::{catch_unwind, AssertUnwindSafe},
     slice,
-    sync::{Mutex, OnceLock},
+    sync::{atomic::{AtomicU8, Ordering}, Mutex, OnceLock},
     time::Instant,
 };
 
 const MAX_FRAME: usize = 1024 * 1024;
 static HOST: OnceLock<Mutex<Assistant>> = OnceLock::new();
+static POLICY_CALLBACK: OnceLock<Mutex<Option<ExternalInferenceFn>>> = OnceLock::new();
+static POLICY_ACTIVATE: OnceLock<Mutex<Option<ExternalActivateFn>>> = OnceLock::new();
+static POLICY_MASK: AtomicU8 = AtomicU8::new(0);
 
 struct Assistant {
     flows: HashMap<u64, MajsoulBridge>,
@@ -108,7 +112,17 @@ impl Assistant {
             self.input_pending = false;
             self.engine = match id {
                 Some(seat) if *seat < *num_players && matches!(num_players, 3 | 4) => {
-                    Some(native_bot::defaults::engine(*num_players, *seat)?)
+                    let mask = POLICY_MASK.load(Ordering::Relaxed);
+                    let bit = if *num_players == 4 { 1 } else { 2 };
+                    let callbacks = if mask & bit != 0 {
+                        let infer = POLICY_CALLBACK.get_or_init(|| Mutex::new(None)).lock().ok().and_then(|cb| *cb);
+                        let activate = POLICY_ACTIVATE.get_or_init(|| Mutex::new(None)).lock().ok().and_then(|cb| *cb);
+                        infer.zip(activate)
+                    } else { None };
+                    Some(match callbacks {
+                        Some((infer, activate)) => native_bot::defaults::engine_with_external(*num_players, *seat, infer, activate)?,
+                        None => native_bot::defaults::engine(*num_players, *seat)?,
+                    })
                 }
                 _ => None,
             };
@@ -138,9 +152,11 @@ impl Assistant {
         let analysis = analysis::analyze(&info);
         let can_act = !self.input_pending && self.tracker.our_seat_can_act() == Some(true);
         let mut recommendations = Vec::new();
+        let mut custom_fallback = false;
         if can_act {
             if let Some(engine) = self.engine.as_mut() {
                 if let Some(decision) = engine.decide()? {
+                    custom_fallback = decision.custom_fallback;
                     // Use action (not candidates[0]) for a riichi: only action
                     // carries the fully resolved riichi discard in upstream.
                     for (index, (action, probability)) in decision.candidates.iter().enumerate() {
@@ -158,7 +174,8 @@ impl Assistant {
             "turn":snap.turn_count, "hand":own.tehai, "canAct":can_act,
             "analysis":analysis, "recommendations":recommendations,
             "elapsedMs":begin.elapsed().as_millis() as u64,
-            "model":"Akagi native BC", "estimated":true,
+            "model":if self.engine.as_ref().is_some_and(Engine::uses_external_policy) { "自定义 ONNX 策略" } else { "Akagi 内置策略" },
+            "modelFallback":custom_fallback, "estimated":true,
         }))
     }
 }
@@ -211,6 +228,22 @@ pub extern "C" fn majmax_ai_reset() {
     if let Ok(mut host) = HOST.get_or_init(|| Mutex::new(Assistant::new())).lock() {
         *host = Assistant::new();
     }
+}
+
+#[no_mangle]
+pub extern "C" fn majmax_ai_register_policy_callbacks(infer: Option<ExternalInferenceFn>,
+    activate: Option<ExternalActivateFn>) {
+    if let Ok(mut current) = POLICY_CALLBACK.get_or_init(|| Mutex::new(None)).lock() {
+        *current = infer;
+    }
+    if let Ok(mut current) = POLICY_ACTIVATE.get_or_init(|| Mutex::new(None)).lock() {
+        *current = activate;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn majmax_ai_set_policy_mask(mask: u8) {
+    POLICY_MASK.store(mask & 0b11, Ordering::Relaxed);
 }
 
 /// Called only by the manager's background worker. Nothing here runs in the game process.

@@ -7,6 +7,7 @@
 
 use candle_core::{Device, Result, Tensor};
 use candle_nn::{conv1d, linear, Conv1d, Conv1dConfig, Linear, Module, VarBuilder};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::Geometry;
 
@@ -15,12 +16,19 @@ pub const CONV: usize = 64;
 pub const BLOCKS: usize = 3;
 pub const FC: usize = 256;
 
+/// Native bridge supplied by the Android host. The callback receives only the
+/// encoded observation tensor and returns action logits; legal masking stays Rust-side.
+pub type ExternalInferenceFn = unsafe extern "C" fn(u8, *const f32, usize, *mut f32, usize) -> i32;
+pub type ExternalActivateFn = unsafe extern "C" fn(u8) -> i32;
+
 pub struct Model {
     conv_in: Conv1d,
     res: Vec<(Conv1d, Conv1d)>,
     fc: Linear,
     head: Linear,
     geo: Geometry,
+    external: Option<ExternalInferenceFn>,
+    external_failed: AtomicBool,
 }
 
 impl Model {
@@ -51,7 +59,19 @@ impl Model {
             fc,
             head,
             geo,
+            external: None,
+            external_failed: AtomicBool::new(false),
         })
+    }
+
+    /// Construct the bundled model as a safe fallback for an optional local policy callback.
+    pub fn from_safetensors_with_external(bytes: Vec<u8>, num_players: u8,
+        external: ExternalInferenceFn, activate: ExternalActivateFn) -> Result<Self> {
+        let mut model = Self::from_safetensors(bytes, num_players)?;
+        let status = unsafe { activate(num_players) };
+        model.external = Some(external);
+        model.external_failed.store(status != 0, Ordering::Relaxed);
+        Ok(model)
     }
 
     pub fn geometry(&self) -> Geometry {
@@ -60,6 +80,16 @@ impl Model {
 
     /// Forward one flattened `[C*T]` observation to action logits `[A]`.
     pub fn forward_logits(&self, obs: &[f32]) -> Result<Vec<f32>> {
+        if let Some(infer) = self.external {
+            let mut logits = vec![0.0; self.geo.action_space];
+            let status = unsafe {
+                infer(self.geo.num_players, obs.as_ptr(), obs.len(), logits.as_mut_ptr(), logits.len())
+            };
+            if status == 0 && logits.iter().all(|value| value.is_finite()) {
+                return Ok(logits);
+            }
+            self.external_failed.store(true, Ordering::Relaxed);
+        }
         let dev = Device::Cpu;
         let x = Tensor::from_vec(
             obs.to_vec(),
@@ -77,4 +107,10 @@ impl Model {
         let logits = self.head.forward(&x)?;
         logits.squeeze(0)?.to_vec1::<f32>()
     }
+
+    pub fn take_external_failure(&self) -> bool {
+        self.external_failed.swap(false, Ordering::Relaxed)
+    }
+
+    pub fn uses_external(&self) -> bool { self.external.is_some() }
 }
