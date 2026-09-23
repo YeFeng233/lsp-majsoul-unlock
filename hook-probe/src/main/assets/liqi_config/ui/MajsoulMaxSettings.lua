@@ -7,7 +7,7 @@
 -- a missing optional UI bundle from changing the original settings window.
 local M = rawget(_G, "__majmax_settings_page") or {}
 
-M.version = "0.7.1"
+M.version = "0.7.2"
 M.labels = {
     traditional = {
         title = "MOD設置",

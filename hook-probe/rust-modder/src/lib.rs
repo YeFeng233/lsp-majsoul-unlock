@@ -221,6 +221,22 @@ impl Core {
             _ => return ProcessResult::default(),
         };
 
+        // The Android module exposes its information in the manager UI. Keep
+        // announcement traffic byte-for-byte intact instead of adding the
+        // upstream Modder's synthetic startup notice. Resolve/remove the RPC
+        // mapping first so these responses cannot leave stale request IDs.
+        if matches!(
+            method.as_str(),
+            ".lq.Lobby.fetchAnnouncement"
+                | ".lq.Lobby.readAnnouncement"
+                | ".lq.NotifyAnnouncementUpdate"
+        ) {
+            if kind == 3 && method == ".lq.Lobby.fetchAnnouncement" {
+                log_message(4, "Official announcements preserved; module notice disabled");
+            }
+            return ProcessResult::default();
+        }
+
         let outcome = self.runtime.block_on(self.modder.modify(
             Bytes::copy_from_slice(input),
             from_client,
@@ -491,6 +507,87 @@ mod tests {
     #[test]
     fn rejects_truncated_varints() {
         assert_eq!(envelope_method(&[0x0a, 0x80]), None);
+    }
+
+    #[test]
+    fn announcement_traffic_preserves_official_messages_and_unknown_fields() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let modder = runtime
+            .block_on(Modder::new(
+                RwLock::new(ModSettings::default()),
+                MaxData::default(),
+            ))
+            .unwrap();
+        let mut core = Core {
+            runtime,
+            modder,
+            requests: HashMap::new(),
+            active_enabled: true,
+        };
+        let frame = |kind, method: &str, payload: Vec<u8>| {
+            let mut wire = vec![kind];
+            if kind != 1 {
+                wire.extend([0x34, 0x12]);
+            }
+            wire.extend(
+                BaseMessage {
+                    method_name: method.to_owned(),
+                    data: payload,
+                }
+                .encode_to_vec(),
+            );
+            // A future envelope field must also survive without re-encoding.
+            wire.extend([0xa0, 0x06, 0x01]);
+            wire
+        };
+        let assert_pass = |result: ProcessResult| {
+            assert_eq!(result.action, PASS);
+            assert!(result.message.data.is_null());
+            assert!(result.injection.data.is_null());
+        };
+        for method in [".lq.Lobby.fetchAnnouncement", ".lq.Lobby.readAnnouncement"] {
+            let request = if method.ends_with("readAnnouncement") {
+                // Even the old synthetic ID must no longer be converted into
+                // an unrelated loginBeat request by the Android adapter.
+                lq::ReqReadAnnouncement {
+                    announcement_id: 1145141919,
+                    ..Default::default()
+                }
+                .encode_to_vec()
+            } else {
+                Vec::new()
+            };
+            assert_pass(core.process(7, true, &frame(2, method, request)));
+            assert_eq!(
+                core.requests.get(&(7, 0x1234)).map(String::as_str),
+                Some(method),
+            );
+            let mut response = if method.ends_with("readAnnouncement") {
+                lq::ResCommon::default().encode_to_vec()
+            } else {
+                lq::ResAnnouncement {
+                    announcements: vec![lq::Announcement {
+                        id: 42,
+                        title: "Official game update".to_owned(),
+                        content: "Keep this announcement".to_owned(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .encode_to_vec()
+            };
+            response.extend([0xa0, 0x06, 0x01]);
+            assert_pass(core.process(7, false, &frame(3, "", response)));
+            assert!(core.requests.is_empty());
+        }
+        assert_pass(core.process(
+            7,
+            false,
+            &frame(1, ".lq.NotifyAnnouncementUpdate", vec![0xa0, 0x06, 0x01]),
+        ));
     }
 
     #[test]

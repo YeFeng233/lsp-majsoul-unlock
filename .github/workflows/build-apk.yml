@@ -70,6 +70,10 @@ jobs:
         working-directory: hook-probe/rust-ai
         run: cargo test --release --locked --target-dir ../build/rust
 
+      - name: Test Android modder and announcement passthrough
+        working-directory: hook-probe/rust-modder
+        run: cargo test --release --locked --target-dir ../build/rust
+
       - name: Build Rust engines and native bridges for all ABIs
         shell: pwsh
         run: ./hook-probe/build-native.ps1 -NdkPath "$env:ANDROID_HOME/ndk/27.2.12479018" -Abis all
