@@ -1,41 +1,49 @@
 param(
     [Parameter(Mandatory = $true)][string]$NdkPath,
-    [string]$CargoPath = "cargo"
+    [string]$CargoPath = "cargo",
+    [ValidateSet('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64', 'all')]
+    [string[]]$Abis = @('arm64-v8a')
 )
 
 $ErrorActionPreference = 'Stop'
-$linker = Join-Path $NdkPath 'toolchains\llvm\prebuilt\windows-x86_64\bin\aarch64-linux-android29-clang.cmd'
-if (-not (Test-Path -LiteralPath $linker)) {
-    throw "Android NDK linker not found: $linker"
-}
+. (Join-Path $PSScriptRoot 'native-common.ps1')
+$toolBin = Get-AndroidNdkBin $NdkPath
+$scriptSuffix = if ($env:OS -eq 'Windows_NT') { '.cmd' } else { '' }
+$binarySuffix = if ($env:OS -eq 'Windows_NT') { '.exe' } else { '' }
+$targetDirectory = Join-Path $PSScriptRoot 'build/rust'
 
-$manifest = Join-Path $PSScriptRoot 'rust-modder\Cargo.toml'
-$destination = Join-Path $PSScriptRoot 'build\native-libs\arm64-v8a'
-New-Item -ItemType Directory -Path $destination -Force | Out-Null
-
-$previousLinker = $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
-$previousRustFlags = $env:RUSTFLAGS
-$previousCc = $env:CC_aarch64_linux_android
-$previousAr = $env:AR_aarch64_linux_android
-try {
-    $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $linker
-    $env:RUSTFLAGS = '-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384'
-    & $CargoPath build --manifest-path $manifest --target aarch64-linux-android --release --locked
-    if ($LASTEXITCODE -ne 0) { throw "Rust build failed: $LASTEXITCODE" }
-    $env:CC_aarch64_linux_android = $linker
-    $env:AR_aarch64_linux_android = Join-Path $NdkPath 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-ar.exe'
-    & $CargoPath build --manifest-path (Join-Path $PSScriptRoot 'rust-ai\Cargo.toml') --target aarch64-linux-android --release --locked
-    if ($LASTEXITCODE -ne 0) { throw "Local AI build failed: $LASTEXITCODE" }
-} finally {
-    $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $previousLinker
-    $env:RUSTFLAGS = $previousRustFlags
-    $env:CC_aarch64_linux_android = $previousCc
-    $env:AR_aarch64_linux_android = $previousAr
+foreach ($target in (Get-AndroidNativeTargets $Abis)) {
+    $linker = Join-Path $toolBin "$($target.clang)-clang$scriptSuffix"
+    if (-not (Test-Path -LiteralPath $linker)) { throw "Android NDK linker not found: $linker" }
+    $targetKey = $target.rust.Replace('-', '_')
+    $settings = @{
+        "CARGO_TARGET_$($targetKey.ToUpperInvariant())_LINKER" = $linker
+        "CC_$targetKey" = $linker
+        "CXX_$targetKey" = Join-Path $toolBin "$($target.clang)-clang++$scriptSuffix"
+        "AR_$targetKey" = Join-Path $toolBin "llvm-ar$binarySuffix"
+        'RUSTFLAGS' = "$env:RUSTFLAGS -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384".Trim()
+    }
+    $previous = @{}
+    try {
+        foreach ($key in $settings.Keys) {
+            $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+            [Environment]::SetEnvironmentVariable($key, $settings[$key], 'Process')
+        }
+        foreach ($crate in @('rust-modder', 'rust-ai')) {
+            Write-Host "Building $crate for $($target.abi)"
+            & $CargoPath build --manifest-path (Join-Path $PSScriptRoot "$crate/Cargo.toml") `
+                --target $target.rust --target-dir $targetDirectory --release --locked
+            if ($LASTEXITCODE -ne 0) { throw "$crate build failed for $($target.abi): $LASTEXITCODE" }
+        }
+    } finally {
+        foreach ($key in $previous.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $previous[$key], 'Process')
+        }
+    }
+    $destination = Join-Path $PSScriptRoot "build/native-libs/$($target.abi)"
+    New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    foreach ($library in @('libmajsoulmodder.so', 'libmajsoulai.so')) {
+        Copy-Item -LiteralPath (Join-Path $targetDirectory "$($target.rust)/release/$library") `
+            -Destination (Join-Path $destination $library) -Force
+    }
 }
-
-$source = Join-Path $PSScriptRoot 'rust-modder\target\aarch64-linux-android\release\libmajsoulmodder.so'
-if (-not (Test-Path -LiteralPath $source)) {
-    throw "Rust output not found: $source"
-}
-Copy-Item -LiteralPath $source -Destination (Join-Path $destination 'libmajsoulmodder.so') -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'rust-ai\target\aarch64-linux-android\release\libmajsoulai.so') -Destination (Join-Path $destination 'libmajsoulai.so') -Force

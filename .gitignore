@@ -20,6 +20,8 @@ release-assets/
 *.pt
 *.pte
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 
 # Signing material and the upstream proxy CA key are never source files.

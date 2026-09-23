@@ -12,6 +12,10 @@ val updateChannel = providers.gradleProperty("updateChannel").orElse("stable").g
 val buildSha = providers.gradleProperty("buildSha")
     .orElse(providers.environmentVariable("GITHUB_SHA").map { it.take(7) })
     .orElse("local build").get()
+val distributionAbis = mapOf(
+    "arm64" to listOf("arm64-v8a"),
+    "universal" to listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64"),
+)
 val stageUpstreamAssets by tasks.registering(Copy::class) {
     from(upstreamDir.resolve("liqi_config")) {
         include("max_data.yaml", "settings.mod.json")
@@ -48,13 +52,22 @@ android {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.6.0"
+        versionCode = 13
+        versionName = "0.7.0"
         buildConfigField("String", "UPDATE_OWNER", "\"${updateOwner.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_CHANNEL", "\"${updateChannel.replace("\"", "\\\"")}\"")
         buildConfigField("String", "BUILD_SHA", "\"${buildSha.replace("\"", "\\\"")}\"")
-        ndk { abiFilters += "arm64-v8a" }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        distributionAbis.forEach { (name, abis) ->
+            create(name) {
+                dimension = "distribution"
+                ndk { abiFilters += abis }
+            }
+        }
     }
 
     buildFeatures {
@@ -101,13 +114,26 @@ dependencies {
 
 tasks.named("preBuild") {
     dependsOn(stageUpstreamAssets)
-    doFirst {
-        val nativeDir = layout.buildDirectory.dir("native-libs/arm64-v8a").get().asFile
-        check(nativeDir.resolve("libmajsoulprobe.so").isFile &&
-                nativeDir.resolve("libmajsoulmodder.so").isFile &&
-                nativeDir.resolve("libmajsoulai.so").isFile &&
-                nativeDir.resolve("libmajsoulai_jni.so").isFile) {
-            "Build the native probe first: ./build-native.ps1 -NdkPath <Android NDK directory>"
+}
+
+distributionAbis.forEach { (distribution, abis) ->
+    val flavorName = distribution.replaceFirstChar { it.uppercaseChar() }
+    val verifyNative = tasks.register("verify${flavorName}NativeLibraries") {
+        doLast {
+            val root = layout.buildDirectory.dir("native-libs").get().asFile
+            val required = listOf("libmajsoulprobe.so", "libmajsoulmodder.so",
+                "libmajsoulai.so", "libmajsoulai_jni.so")
+            val missing = abis.flatMap { abi -> required.map { "$abi/$it" } }
+                .filterNot { root.resolve(it).isFile }
+            check(missing.isEmpty()) {
+                "Missing native libraries: ${missing.joinToString()}. " +
+                    "Run build-native.ps1 -NdkPath <NDK> -Abis ${if (distribution == "universal") "all" else "arm64-v8a"}"
+            }
+        }
+    }
+    tasks.configureEach {
+        if (name.startsWith("pre$flavorName") && name.endsWith("Build")) {
+            dependsOn(verifyNative)
         }
     }
 }

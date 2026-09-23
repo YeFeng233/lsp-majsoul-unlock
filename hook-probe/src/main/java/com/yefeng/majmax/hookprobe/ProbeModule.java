@@ -54,7 +54,7 @@ public final class ProbeModule extends XposedModule {
         targetProcess = !param.isSystemServer() && GAME.equals(param.getProcessName());
         if (!targetProcess) return;
         HookDiagnostics.event("INFO", "hook.entry", "MODULE_LOADED",
-                HookDiagnostics.fields("api", getApiVersion(), "moduleVersion", "0.6.0"));
+                HookDiagnostics.fields("api", getApiVersion(), "moduleVersion", BuildConfig.VERSION_NAME));
         log(Log.INFO, TAG, "API=" + getApiVersion() + " framework="
                 + getFrameworkName() + " " + getFrameworkVersion());
         try {
@@ -73,6 +73,7 @@ public final class ProbeModule extends XposedModule {
         if (!targetProcess || !GAME.equals(param.getPackageName()) || !param.isFirstPackage()) {
             return;
         }
+        LspatchUnityCompat.install(this, GAME);
         try {
             Class<?> activity = param.getClassLoader().loadClass(
                     "com.soulgamechst.mahjongsoulsdk.MainActivity");

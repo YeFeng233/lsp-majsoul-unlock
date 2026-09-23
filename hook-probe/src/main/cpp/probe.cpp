@@ -57,7 +57,6 @@ extern "C" int majmax_modder_update_settings(const uint8_t *patch, size_t patchL
 HookFn installHook = nullptr;
 std::atomic<void *> il2cppHandle{nullptr};
 std::atomic<bool> bootstrapStarted{false};
-std::atomic<bool> toluaLoaded{false};
 std::atomic<bool> hooksReady{false};
 std::atomic<void *> luaBridgeState{nullptr};
 std::atomic<void *> toluaHandle{nullptr};
@@ -554,7 +553,6 @@ void *bootstrap(void *) {
     if (!handle || !resolveApi(handle)) return nullptr;
     for (int attempt = 0; attempt < 150; ++attempt) {
         usleep(200000);
-        if (!toluaLoaded.load()) continue;
         void *domain = api.domainGet();
         if (!domain) continue;
         size_t assemblyCount = 0;
@@ -629,22 +627,37 @@ void *bootstrap(void *) {
     return nullptr;
 }
 
+void startBootstrapIfReady() {
+    // Resource downloads and login screens can delay ToLua by many minutes.
+    // Start the metadata readiness window only once both libraries are loaded.
+    // Either load order is supported, and only one thread may install hooks.
+    if (!il2cppHandle.load() || !toluaHandle.load()
+            || bootstrapStarted.exchange(true)) return;
+    pthread_t thread;
+    int result = pthread_create(&thread, nullptr, bootstrap, nullptr);
+    if (result == 0) {
+        pthread_detach(thread);
+        INFO("IL2CPP bootstrap started after IL2CPP and ToLua loaded");
+    } else {
+        bootstrapStarted.store(false);
+        ERROR("Cannot start bootstrap thread: %d", result);
+    }
+}
+
 void onLibraryLoaded(const char *name, void *handle) {
     if (!name || !handle) return;
     if (std::strstr(name, "libil2cpp.so")) {
         il2cppHandle.store(handle);
-        if (!bootstrapStarted.exchange(true)) {
-            pthread_t thread;
-            int result = pthread_create(&thread, nullptr, bootstrap, nullptr);
-            if (result == 0) pthread_detach(thread);
-            else ERROR("Cannot start bootstrap thread: %d", result);
+        if (!toluaHandle.load()) {
+            INFO("IL2CPP loaded; waiting for ToLua before bootstrap");
         }
+        startBootstrapIfReady();
     } else if (std::strstr(name, "libtolua.so")) {
-        toluaHandle.store(handle);
-        toluaLoaded.store(true);
         if (!installLuaLoadHook(handle)) {
             WARN("ToLua settings bridge is unavailable; UI injection disabled");
         }
+        toluaHandle.store(handle);
+        startBootstrapIfReady();
     }
 }
 } // namespace
