@@ -81,7 +81,7 @@ ZIP 写入应用缓存目录的专用 `diagnostics/share/`，通过 `FileProvide
 
 ### 2.3 导入、运行与回退
 
-文件选择使用 Android `ACTION_OPEN_DOCUMENT`，以 `*/*` 展示各文件提供方，再检查扩展名及实际 ONNX 内容。后台通过 `ContentResolver` 将选中文件限量复制到应用私有目录的临时文件，计算 SHA-256、校验后原子替换模型槽位；无需读取整个共享存储，也不依赖原始 URI 长期有效。[Android Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)。建议首版模型文件上限 64 MiB，超过直接拒绝。
+文件选择使用 Android `ACTION_OPEN_DOCUMENT`，以 `*/*` 展示各文件提供方，再检查扩展名及实际 ONNX 内容。后台通过 `ContentResolver` 将选中文件限量复制到应用私有目录的临时文件，计算 SHA-256、校验后原子替换模型槽位；无需读取整个共享存储，也不依赖原始 URI 长期有效。[Android Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)。模型文件上限为 128 MiB，超过直接拒绝。
 
 在管理应用进程加入固定版本的 `com.microsoft.onnxruntime:onnxruntime-android`（设计时可用版本 `1.30.0`，实现时以 CI 锁定并在目标设备验证）。先用 CPU 执行，`OrtEnvironment` / `OrtSession` 只在助手后台线程所需生命周期内创建；每次运行关闭输入张量和结果，切换时关闭旧 Session。完整 Android 包支持标准 ONNX 算子，但会增加 APK 与运行时内存；缩减算子包应在模型协议稳定后单独评估。[ORT Android 包](https://onnxruntime.ai/docs/tutorials/mobile/)、[Maven Central 包](https://central.sonatype.com/artifact/com.microsoft.onnxruntime/onnxruntime-android)。
 

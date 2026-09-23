@@ -19,7 +19,7 @@ internal data class ImportedPolicy(val players: Int, val name: String, val bytes
 
 /** Validates and runs only the documented Akagi policy contract, inside app-private storage. */
 internal object OnnxModelStore {
-    private const val MAX_BYTES = 64L * 1024 * 1024
+    private const val MAX_BYTES = 128L * 1024 * 1024
     private const val PREFS = "onnx-policy-models"
     private val environment by lazy { OrtEnvironment.getEnvironment() }
     private val timeoutScheduler = Executors.newSingleThreadScheduledExecutor { task ->
@@ -108,7 +108,7 @@ internal object OnnxModelStore {
                     val count = source.read(buffer)
                     if (count < 0) break
                     bytes += count
-                    require(bytes <= MAX_BYTES) { "模型文件超过 64 MiB 限制" }
+                    require(bytes <= MAX_BYTES) { "模型文件超过 128 MiB 限制" }
                     digest.update(buffer, 0, count)
                     output.write(buffer, 0, count)
                 }
