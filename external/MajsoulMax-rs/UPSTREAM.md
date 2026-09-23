@@ -19,5 +19,9 @@ This directory keeps the upstream Modder source, Liqi descriptor and runtime con
 | 立直-给点颜色 | item | 30530015 |
 | 立直棒-墨彩喷喷 | item | 30560012 |
 | 桌布-混一色！ | item | 30580030 |
+| 牌背-喵体力学 | item | 30570019 |
+| 守梦夜明-2026（限时物品） | loading_image | 307295 |
+| 守梦夜明-2026（普通物品） | loading_image | 307495 |
+| 守梦夜明-2026（插画配置） | loading_image | 260901 |
 
 The Android asset revision is bumped so a future APK containing this catalog replaces the game's cached catalog while preserving the user's settings. These are local display overrides, not changes to server-side ownership.

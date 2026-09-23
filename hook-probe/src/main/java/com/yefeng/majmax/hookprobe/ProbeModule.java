@@ -29,7 +29,7 @@ public final class ProbeModule extends XposedModule {
     private static final String TAG = "MajsoulProbe";
     private static final Uri AI_ENDPOINT_URI = Uri.parse(
             "content://com.yefeng.majmax.hookprobe.ai/capture");
-    private static final String ASSET_VERSION = "0.7.2";
+    private static final String ASSET_VERSION = "0.7.2-catalog2";
     private static final String[] VERSIONED_ASSETS = {
             "max_data.yaml", "ui/MajsoulMaxSettings.lua"
     };

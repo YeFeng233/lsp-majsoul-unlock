@@ -52,7 +52,7 @@ android {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
         targetSdk = 35
-        versionCode = 15
+        versionCode = 16
         versionName = "0.7.2"
         buildConfigField("String", "UPDATE_OWNER", "\"${updateOwner.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\"", "\\\"")}\"")
