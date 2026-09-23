@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
+import com.yefeng.majmax.hookprobe.BuildConfig
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File

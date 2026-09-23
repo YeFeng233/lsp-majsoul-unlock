@@ -18,7 +18,7 @@ import java.util.UUID
 internal data class ImportedPolicy(val players: Int, val name: String, val bytes: Long, val sha256: String)
 
 /** Validates and runs only the documented Akagi policy contract, inside app-private storage. */
-object OnnxModelStore {
+internal object OnnxModelStore {
     private const val MAX_BYTES = 64L * 1024 * 1024
     private const val PREFS = "onnx-policy-models"
     private val environment by lazy { OrtEnvironment.getEnvironment() }
