@@ -31,3 +31,14 @@ The Android asset revision is bumped so a future APK containing this catalog rep
 `src/modder.rs` saves the settings document immediately after handling `.lq.Lobby.changeCharacterSkin`, before sending the local character notification. The pinned upstream handler only updates `char_skin` in memory, so the selected skin is otherwise lost on process restart unless another settings action happens to save it. The Android settings adapter provides the existing atomic file writer. The regression test in `hook-probe/rust-modder` checks immediate persistence, repeated changes, unrelated settings and restoration from disk when the server returns default skins after restart.
 
 The adapter names temporary settings files using the process ID and a write sequence, rather than thread names that can contain invalid path characters on the Windows test host.
+
+## Additional skin catalog entries, 2026-09-27
+
+The connected client's shop shows four Drowsy Daylight (纯白午后) skins that were missing from the local catalog. Their IDs were present in the Android runtime table inspected on September 24 and are cross-checked against the same pinned MajsoulData tables linked above. This update adds only those four skin IDs and refreshes the Android asset revision while keeping the user's selected skins.
+
+| Character | Character ID | Skin ID |
+| --- | --- | --- |
+| 相原舞 | 200005 | 400509 |
+| 如月彩音 | 200068 | 406805 |
+| 二之宫花 | 200017 | 401710 |
+| 雏桃 | 200026 | 402607 |
