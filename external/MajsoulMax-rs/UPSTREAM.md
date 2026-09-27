@@ -25,3 +25,9 @@ This directory keeps the upstream Modder source, Liqi descriptor and runtime con
 | 守梦夜明-2026（插画配置） | loading_image | 260901 |
 
 The Android asset revision is bumped so a future APK containing this catalog replaces the game's cached catalog while preserving the user's settings. These are local display overrides, not changes to server-side ownership.
+
+## Local persistence fix, 2026-09-27
+
+`src/modder.rs` saves the settings document immediately after handling `.lq.Lobby.changeCharacterSkin`, before sending the local character notification. The pinned upstream handler only updates `char_skin` in memory, so the selected skin is otherwise lost on process restart unless another settings action happens to save it. The Android settings adapter provides the existing atomic file writer. The regression test in `hook-probe/rust-modder` checks immediate persistence, repeated changes, unrelated settings and restoration from disk when the server returns default skins after restart.
+
+The adapter names temporary settings files using the process ID and a write sequence, rather than thread names that can contain invalid path characters on the Windows test host.

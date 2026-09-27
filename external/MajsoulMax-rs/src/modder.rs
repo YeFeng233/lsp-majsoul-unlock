@@ -556,6 +556,7 @@ impl Modder {
                     .await
                     .char_skin
                     .insert(msg.character_id, msg.skin);
+                self.mod_settings.read().await.write();
                 let character = self.perfect_character(msg.character_id).await?;
                 let mut character_update = lq::account_update::CharacterUpdate::default();
                 character_update.characters.push(character);

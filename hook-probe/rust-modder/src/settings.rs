@@ -8,6 +8,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use tracing::error;
 
@@ -307,6 +308,7 @@ impl ModSettings {
     /// written JSON file to the next game process. The temporary file lives
     /// beside the target so rename remains atomic on Android's filesystem.
     pub fn write_atomic(&self) -> Result<()> {
+        static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
         ensure!(
             !self.dir.as_os_str().is_empty(),
             "设置目录未初始化"
@@ -316,7 +318,7 @@ impl ModSettings {
         let temporary = path.with_extension(format!(
             "json.tmp.{}.{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("writer")
+            NEXT_WRITE.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&temporary);
         let mut file = OpenOptions::new()

@@ -591,6 +591,124 @@ mod tests {
     }
 
     #[test]
+    fn skin_changes_are_saved_immediately_and_restored_after_restart() {
+        struct TestDirectory(PathBuf);
+        impl Drop for TestDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = TestDirectory(std::env::temp_dir().join(format!(
+            "majmax-skin-persistence-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir(&directory.0).unwrap();
+        let mut initial = ModSettings::default();
+        initial.main_char = 20000101;
+        initial.nickname = "persisted nickname".to_owned();
+        initial.title = 700001;
+        initial.loading_bg = vec![260901];
+        initial.char_skin.insert(20000101, 40010101);
+        initial.char_skin.insert(20000126, 40012601);
+        std::fs::write(
+            directory.0.join("settings.mod.json"),
+            serde_json::to_vec(&initial).unwrap(),
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let catalog = MaxData {
+            character: vec![20000101, 20000126],
+            skin: vec![40010101, 40010102, 40012601, 40012602],
+            ..Default::default()
+        };
+        // Check that this host can persist the fixture before testing the RPC.
+        ModSettings::load(&directory.0)
+            .unwrap()
+            .write_atomic()
+            .unwrap();
+        let modder = runtime
+            .block_on(Modder::new(
+                RwLock::new(ModSettings::load(&directory.0).unwrap()),
+                catalog.clone(),
+            ))
+            .unwrap();
+        // Exercise the current character, another character and a second change
+        // without triggering any other request that might incidentally save.
+        for (character_id, skin) in [
+            (20000101, 40010102),
+            (20000126, 40012602),
+            (20000101, 40010101),
+        ] {
+            let mut wire = vec![2, 0x34, 0x12];
+            wire.extend(
+                BaseMessage {
+                    method_name: ".lq.Lobby.changeCharacterSkin".to_owned(),
+                    data: lq::ReqChangeCharacterSkin { character_id, skin }.encode_to_vec(),
+                }
+                .encode_to_vec(),
+            );
+            let output = runtime.block_on(modder.modify(Bytes::from(wire), true, ""));
+            assert!(
+                output.inject_msg.is_some(),
+                "skin notification must still be delivered"
+            );
+            let saved = ModSettings::load(&directory.0).unwrap();
+            assert_eq!(saved.char_skin.get(&character_id), Some(&skin));
+            assert_eq!(saved.main_char, initial.main_char);
+            assert_eq!(saved.nickname, initial.nickname);
+            assert_eq!(saved.title, initial.title);
+            assert_eq!(saved.loading_bg, initial.loading_bg);
+        }
+        drop(modder);
+        let restarted = runtime
+            .block_on(Modder::new(
+                RwLock::new(ModSettings::load(&directory.0).unwrap()),
+                catalog,
+            ))
+            .unwrap();
+        let mut response = vec![3, 0x35, 0x12];
+        response.extend(
+            BaseMessage {
+                method_name: String::new(),
+                // Model the server returning its original/default skins again.
+                data: lq::ResCharacterInfo {
+                    main_character_id: 20000101,
+                    characters: vec![lq::Character {
+                        charid: 20000126,
+                        skin: 40012601,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .encode_to_vec(),
+            }
+            .encode_to_vec(),
+        );
+        let restored = runtime.block_on(restarted.modify(
+            Bytes::from(response),
+            false,
+            ".lq.Lobby.fetchCharacterInfo",
+        ));
+        let response = restored.msg.unwrap();
+        let envelope = BaseMessage::decode(&response[3..]).unwrap();
+        let characters = lq::ResCharacterInfo::decode(envelope.data.as_slice()).unwrap();
+        let skins: HashMap<_, _> = characters
+            .characters
+            .iter()
+            .map(|c| (c.charid, c.skin))
+            .collect();
+        assert_eq!(skins.get(&20000101), Some(&40010101));
+        assert_eq!(skins.get(&20000126), Some(&40012602));
+    }
+
+    #[test]
     fn skin_change_produces_fake_request_and_local_notification() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
