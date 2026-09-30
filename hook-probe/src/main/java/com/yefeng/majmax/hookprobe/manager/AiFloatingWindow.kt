@@ -22,7 +22,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** A small native overlay: only its bounds receive touches; text stays opaque. */
-internal class AiFloatingWindow(private val context: Context, private val stop: () -> Unit) {
+internal class AiFloatingWindow(private val context: Context, private val stop: () -> Unit,
+    private val toggleAuto: () -> Unit) {
     private val windows = context.getSystemService(WindowManager::class.java)
     private val preferences = context.getSharedPreferences("ai-window", Context.MODE_PRIVATE)
     private val green = Color.rgb(114, 236, 176)
@@ -31,6 +32,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
     private var width = preferences.getInt("width", 300).coerceIn(220, 420)
     private var collapsed = preferences.getBoolean("collapsed", false)
     private var settings = false
+    private var auto = AutoDiscardStatus()
     private var result = JSONObject().put("status", "waiting").put("message", "等待牌局连接")
     private var root: LinearLayout? = null
     private var body: LinearLayout? = null
@@ -49,7 +51,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
     fun show() { rebuild() }
     fun update(value: JSONObject) {
         result = value
-        title?.text = if (collapsed) "AI" else if (value.optString("status") == "demo") "本地自检 · 样例" else "雀魂 · 本地 AI"
+        title?.text = caption()
         if (!settings) renderBody()
         root?.post { clampPosition(); root?.let { runCatching { windows.updateViewLayout(it, layout) } } }
     }
@@ -58,6 +60,15 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         root = null
     }
     fun configurationChanged() { rebuild() }
+    fun updateAuto(value: AutoDiscardStatus) {
+        if (auto == value) return
+        auto = value
+        title?.text = caption()
+        title?.contentDescription = if (collapsed && auto.enabled) "暂停自动切牌，可拖动" else if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
+        if (!collapsed) renderBody()
+    }
+    private fun caption() = if (collapsed) (if (auto.enabled) "停" else "AI")
+        else if (result.optString("status") == "demo") "本地自检 · 样例" else "雀魂 · 本地 AI"
 
     private fun dp(value: Int) = (value * context.resources.displayMetrics.density).roundToInt()
     private fun background() = GradientDrawable().apply {
@@ -92,14 +103,17 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         }
         root = panel
         val heading = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        val caption = label(if (collapsed) "AI" else if (result.optString("status") == "demo") "本地自检 · 样例" else "雀魂 · 本地 AI",
+        val caption = label(caption(),
             if (collapsed) 16f else 13f, green, true)
         title = caption
         caption.gravity = if (collapsed) Gravity.CENTER else Gravity.CENTER_VERTICAL
         caption.setPadding(dp(if (collapsed) 0 else 12), 0, 0, 0)
-        caption.contentDescription = if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
+        caption.contentDescription = if (collapsed && auto.enabled) "暂停自动切牌，可拖动" else if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
         heading.addView(caption, LinearLayout.LayoutParams(if (collapsed) dp(48) else 0, dp(48), if (collapsed) 0f else 1f))
-        makeDraggable(caption) { if (collapsed) { collapsed = false; save(); rebuild() } }
+        makeDraggable(caption) {
+            if (collapsed && auto.enabled) toggleAuto()
+            else if (collapsed) { collapsed = false; save(); rebuild() }
+        }
         if (!collapsed) {
             heading.addView(action("调节", "调节透明度和宽度") { settings = !settings; rebuild() })
             heading.addView(action("收纳", "收纳成浮标") { collapsed = true; settings = false; save(); rebuild() })
@@ -132,6 +146,10 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
     private fun renderBody() {
         val content = body ?: return
         content.removeAllViews()
+        content.addView(label(auto.message, 11f, if (auto.enabled) green else muted))
+        content.addView(action(if (auto.enabled) "暂停" else "开启", "自动切牌开关", toggleAuto).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44))
+        })
         if (settings) {
             addSlider(content, "背景不透明度", 25, 95, opacity, { "$it%" }) {
                 opacity = it; root?.background = background(); save()

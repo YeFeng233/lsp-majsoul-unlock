@@ -45,6 +45,9 @@ class AiOverlayService : Service() {
         private const val STOP = "local-ai.STOP"
         private val ENDPOINT_URI = Uri.parse("content://com.yefeng.majmax.hookprobe.ai/capture")
         @Volatile private var advertisedEndpoint: CaptureEndpoint? = null
+        @Volatile private var instance: AiOverlayService? = null
+        internal fun autoPoll(acks: String?): String? = instance?.auto?.poll(acks)
+        fun toggleAuto() { instance?.auto?.toggle() }
 
         internal fun currentEndpoint(): CaptureEndpoint? = advertisedEndpoint?.let {
             CaptureEndpoint(it.port, it.token.copyOf())
@@ -58,7 +61,13 @@ class AiOverlayService : Service() {
     }
 
     private data class Packet(val epoch: Long, val revision: Long, val connection: Long = 0,
-        val kind: Int, val bytes: ByteArray = byteArrayOf(), val message: String = "")
+        val kind: Int, val bytes: ByteArray = byteArrayOf(), val message: String = "",
+        val source: Long = 0, val sequence: Long = 0)
+    private val auto = AutoDiscardController(log = { message ->
+        val parts = message.split(' ', limit = 2)
+        DiagnosticsStore.appendAssistant(this, "INFO", "assistant.autoplay", parts[0].removeSuffix(":"),
+            JSONObject().put("reason", parts.getOrNull(1) ?: ""))
+    })
     private val alive = AtomicBoolean(true)
     private val demoMode = AtomicBoolean(false)
     private val epoch = AtomicLong(0)
@@ -72,9 +81,18 @@ class AiOverlayService : Service() {
     private var worker: Thread? = null
     private var overlay: AiFloatingWindow? = null
     @Volatile private var fallbackLogged = false
+    private val autoUiTick = object : Runnable {
+        override fun run() {
+            if (!alive.get()) return
+            overlay?.updateAuto(AutoDiscardState.mutable.value)
+            main.postDelayed(this, 200)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
+        auto.pause("自动切牌默认关闭；同步牌局后可手动开启")
         OnnxModelStore.initialize(this)
         DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "SERVICE_STARTED")
         val notifications = getSystemService(NotificationManager::class.java)
@@ -93,7 +111,8 @@ class AiOverlayService : Service() {
             stopSelf()
             return
         }
-        overlay = AiFloatingWindow(this) { stopSelf() }.also { it.show() }
+        overlay = AiFloatingWindow(this, { stopSelf() }, { auto.toggle() }).also { it.show() }
+        main.post(autoUiTick)
         worker = Thread({ consume() }, "majmax-ai-engine").also { it.start() }
         reader = Thread({ listen() }, "majmax-ai-reader").also { it.start() }
     }
@@ -116,6 +135,7 @@ class AiOverlayService : Service() {
     }
 
     private fun reset(message: String) {
+        auto.invalidate("连接或同步已变化，自动切牌已暂停")
         val generation = epoch.incrementAndGet()
         queue.clear()
         val ticket = revision.incrementAndGet()
@@ -155,6 +175,7 @@ class AiOverlayService : Service() {
                         require(size in 0..1_048_576)
                         val source = input.readLong()
                         val connection = input.readLong()
+                        val sequence = input.readLong()
                         val kind = input.readUnsignedByte()
                         require(kind in listOf(0, 1, 2, 4))
                         val data = ByteArray(size)
@@ -165,7 +186,8 @@ class AiOverlayService : Service() {
                         }
                         sourceGeneration = source
                         if (kind == 4) continue
-                        val packet = Packet(epoch.get(), revision.incrementAndGet(), connection, kind, data)
+                        val packet = Packet(epoch.get(), revision.incrementAndGet(), connection, kind, data,
+                            source = source, sequence = sequence)
                         if (!queue.offer(packet)) {
                             reset("分析未跟上牌局，请重新进入牌局同步")
                             break
@@ -192,6 +214,7 @@ class AiOverlayService : Service() {
 
     private fun consume() {
         var last = JSONObject().put("status", "waiting").put("message", "等待牌局")
+        val sources = HashMap<Long, Pair<Long, Long>>()
         try {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             AiNative.reset()
@@ -200,6 +223,8 @@ class AiOverlayService : Service() {
             while (alive.get()) {
                 val packet = queue.take()
                 if (packet.epoch != epoch.get()) continue
+                if (packet.kind == 3) sources.clear()
+                else if (packet.kind in 0..2) sources[packet.connection] = packet.source to packet.sequence
                 val result = when (packet.kind) {
                     3 -> { AiNative.reset(); JSONObject().put("status", "waiting").put("message", packet.message).toString() }
                     5 -> AiNative.selfTest()
@@ -208,6 +233,11 @@ class AiOverlayService : Service() {
                 if (packet.epoch != epoch.get()) continue
                 if (result != null) {
                     last = JSONObject(result)
+                    val active = last.optString("connection").toLongOrNull()
+                    sources[active]?.let { (generation, sequence) ->
+                        last.put("sourceGeneration", generation).put("sourceSequence", sequence)
+                    }
+                    auto.observe(last)
                     if (last.optBoolean("modelFallback") && !fallbackLogged) {
                         fallbackLogged = true
                         DiagnosticsStore.appendAssistant(this, "ERROR", "assistant.model", "MODEL_RUNTIME_FALLBACK")
@@ -220,6 +250,7 @@ class AiOverlayService : Service() {
         } catch (_: InterruptedException) {
             // Normal service shutdown.
         } catch (_: Throwable) {
+            auto.invalidate("本地引擎异常，自动切牌已暂停")
             val failed = JSONObject().put("status", "error").put("message", "本地引擎加载失败，请停止助手并重启管理应用")
             post(failed, epoch.get(), revision.get())
         }
@@ -240,6 +271,8 @@ class AiOverlayService : Service() {
 
     override fun onDestroy() {
         alive.set(false)
+        auto.invalidate("助手已停止，自动切牌已暂停")
+        instance = null
         epoch.incrementAndGet()
         advertisedEndpoint = null
         runCatching { client?.close() }

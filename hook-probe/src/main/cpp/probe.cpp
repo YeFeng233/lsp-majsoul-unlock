@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -49,6 +50,7 @@ extern "C" int majmax_modder_process(uintptr_t connection, bool fromClient,
 extern "C" void majmax_modder_forget_connection(uintptr_t connection);
 extern "C" void majmax_capture_configure();
 extern "C" void majmax_capture_set_endpoint(uint32_t port, const uint8_t *token, size_t tokenLen);
+extern "C" bool majmax_capture_is_current(uint64_t generation, uint64_t connection, uint64_t sequence);
 extern "C" void majmax_modder_free(uint8_t *data, size_t len);
 extern "C" int majmax_modder_get_settings(RustBuffer *output);
 extern "C" int majmax_modder_update_settings(const uint8_t *patch, size_t patchLen,
@@ -65,6 +67,16 @@ std::atomic<bool> uiPageReady{false};
 std::atomic<int64_t> uiScriptLastRunMs{0};
 std::mutex uiScriptMutex;
 std::string uiScript;
+std::mutex autoMutex;
+std::string autoCommand;
+std::deque<std::string> autoResults;
+uint64_t autoGeneration = 0, autoConnection = 0, autoSequence = 0;
+int64_t autoReceivedMs = 0, autoLastPumpMs = 0;
+
+int64_t monotonicMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 struct Il2CppApi {
     void *(*domainGet)();
@@ -173,6 +185,30 @@ int luaLogMessage(void *state) {
     return 0;
 }
 
+int luaAutoCommand(void *state) {
+    std::lock_guard<std::mutex> lock(autoMutex);
+    pushLuaText(state, autoCommand);
+    return 1;
+}
+
+int luaAutoCurrent(void *state) {
+    std::lock_guard<std::mutex> lock(autoMutex);
+    const bool valid = !autoCommand.empty() && monotonicMs() - autoReceivedMs < 6000 &&
+            majmax_capture_is_current(autoGeneration, autoConnection, autoSequence);
+    pushLuaText(state, valid ? "yes" : "no");
+    return 1;
+}
+
+int luaAutoAck(void *state) {
+    size_t length = 0;
+    const char *text = luaToLString ? luaToLString(state, 1, &length) : nullptr;
+    if (!text || !length || length > 2048) return 0;
+    std::lock_guard<std::mutex> lock(autoMutex);
+    if (autoResults.size() == 32) autoResults.pop_front();
+    autoResults.emplace_back(text, length);
+    return 0;
+}
+
 bool installLuaBridge(void *state) {
     if (!state || !luaPushCClosure || !luaSetField || !luaPushLString) return false;
     // Lua 5.1/LuaJIT's LUA_GLOBALSINDEX. The game exports lua_setfield but
@@ -186,6 +222,12 @@ bool installLuaBridge(void *state) {
     luaSetField(state, kLuaGlobalsIndex, "__majmax_ui_ready");
     luaPushCClosure(state, luaLogMessage, 0);
     luaSetField(state, kLuaGlobalsIndex, "__majmax_ui_log");
+    luaPushCClosure(state, luaAutoCommand, 0);
+    luaSetField(state, kLuaGlobalsIndex, "__majmax_auto_command");
+    luaPushCClosure(state, luaAutoCurrent, 0);
+    luaSetField(state, kLuaGlobalsIndex, "__majmax_auto_current");
+    luaPushCClosure(state, luaAutoAck, 0);
+    luaSetField(state, kLuaGlobalsIndex, "__majmax_auto_ack");
     INFO("Lua settings bridge registered");
     return true;
 }
@@ -271,6 +313,17 @@ void hookedLuaLooperUpdate(void *looper) {
         luaClientInstance.store(luaClientGetInstance(nullptr));
     }
     runUiBootstrap(luaClientInstance.load());
+    const int64_t now = monotonicMs();
+    if (now - autoLastPumpMs < 100) return;
+    autoLastPumpMs = now;
+    void *client = luaClientInstance.load();
+    if (!client || !luaClientGetMainState || !luaStateDoString || !api.stringNew) return;
+    void *state = luaClientGetMainState(client);
+    if (!state) return;
+    // Static code only. Commands remain JSON data and are revalidated in Lua.
+    void *chunk = api.stringNew("if __majmax_auto_tick then __majmax_auto_tick() end");
+    void *name = api.stringNew("@MajsoulMaxAutoTick");
+    if (chunk && name) luaStateDoString(state, chunk, name);
 }
 
 bool resolveApi(void *handle) {
@@ -674,6 +727,11 @@ static bool loadUiScript(const char *configDir) {
     std::string script(static_cast<size_t>(length), '\0');
     input.read(script.data(), length);
     if (!input) return false;
+    std::ifstream autoInput(std::string(configDir) + "/ui/MajsoulMaxAutoDiscard.lua", std::ios::binary);
+    if (autoInput) {
+        std::string autoScript((std::istreambuf_iterator<char>(autoInput)), std::istreambuf_iterator<char>());
+        if (autoScript.size() < 64 * 1024) script = "do\n" + autoScript + "\nend\n" + script;
+    }
     {
         std::lock_guard<std::mutex> lock(uiScriptMutex);
         uiScript = std::move(script);
@@ -713,6 +771,32 @@ Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeCaptureEndpoint(
     majmax_capture_set_endpoint(static_cast<uint32_t>(port),
             reinterpret_cast<const uint8_t *>(bytes), 32);
     environment->ReleaseByteArrayElements(token, bytes, JNI_ABORT);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeAutoCommand(
+        JNIEnv *env, jclass, jstring command, jlong generation, jlong connection, jlong sequence) {
+    std::string next;
+    if (command && env->GetStringUTFLength(command) <= 16 * 1024) {
+        const char *chars = env->GetStringUTFChars(command, nullptr);
+        if (chars) { next = chars; env->ReleaseStringUTFChars(command, chars); }
+    }
+    std::lock_guard<std::mutex> lock(autoMutex);
+    if (autoCommand != next) autoReceivedMs = monotonicMs();
+    autoCommand = std::move(next);
+    autoGeneration = static_cast<uint64_t>(generation);
+    autoConnection = static_cast<uint64_t>(connection);
+    autoSequence = static_cast<uint64_t>(sequence);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_yefeng_majmax_hookprobe_ProbeModule_nativeAutoResults(JNIEnv *env, jclass) {
+    std::lock_guard<std::mutex> lock(autoMutex);
+    std::string json = "[";
+    for (const auto &entry : autoResults) { if (json.size() > 1) json += ','; json += entry; }
+    json += ']';
+    autoResults.clear();
+    return env->NewStringUTF(json.c_str());
 }
 
 extern "C" __attribute__((visibility("default"), used))

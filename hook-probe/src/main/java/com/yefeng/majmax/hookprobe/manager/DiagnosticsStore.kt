@@ -41,7 +41,7 @@ internal object DiagnosticsStore {
         "CAPTURE_ENDPOINT_READY", "CAPTURE_ENDPOINT_LOST", "LOG_DROPPED", "HOOK_BATCH_REJECTED",
     )
     private val levels = setOf("DEBUG", "INFO", "WARN", "ERROR")
-    private val components = setOf("hook.entry", "hook.native", "hook.capture", "assistant.service", "assistant.model", "assistant.engine", "manager")
+    private val components = setOf("hook.entry", "hook.native", "hook.capture", "assistant.service", "assistant.model", "assistant.engine", "assistant.autoplay", "manager")
     private val allowedFieldNames = setOf("api", "moduleVersion", "count", "reason")
 
     private fun directory(context: Context) = File(context.filesDir, "diagnostics")

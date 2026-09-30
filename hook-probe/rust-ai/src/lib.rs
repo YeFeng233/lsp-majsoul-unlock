@@ -31,6 +31,7 @@ struct Assistant {
     round_ready: bool,
     input_pending: bool,
     revision: u64,
+    step: u64,
 }
 
 fn waiting(message: &str) -> Value {
@@ -41,7 +42,7 @@ impl Assistant {
     fn new() -> Self {
         Self {
             flows: HashMap::new(), active: None, tracker: GameTracker::new(),
-            engine: None, round_ready: false, input_pending: false, revision: 0,
+            engine: None, round_ready: false, input_pending: false, revision: 0, step: 0,
         }
     }
 
@@ -75,10 +76,18 @@ impl Assistant {
             } else { None });
         }
         let method = &parsed.parsed.as_ref().unwrap().method;
+        if direction == 0 && matches!(method.as_str(), ".lq.ActionPrototype" | ".lq.FastTest.syncGame") {
+            if let Some(step) = parsed.parsed.as_ref().unwrap().args.pointer("/payload/step").and_then(Value::as_u64) {
+                self.step = step;
+            }
+        }
         if self.active == Some(connection) && direction == 1 &&
             matches!(method.as_str(), ".lq.FastTest.inputOperation" | ".lq.FastTest.inputChiPengGang") {
             self.input_pending = true;
-            return Ok(Some(self.render()?));
+            let mut result = self.render()?;
+            result["input"] = json!({"method":method,
+                "payload":parsed.parsed.as_ref().unwrap().args["payload"]});
+            return Ok(Some(result));
         }
         if parsed.events.is_empty() {
             if self.active == Some(connection) && method == ".lq.ActionPrototype" &&
@@ -169,13 +178,16 @@ impl Assistant {
         let own = &snap.players[seat as usize];
         Ok(json!({
             "status":"live", "message": if can_act { "轮到你操作" } else { "等待其他玩家" },
-            "revision":self.revision, "seat":seat, "players":snap.num_players,
+            "revision":self.revision, "step":self.step, "connection":self.active.map(|id| id.to_string()),
+            "inputPending":self.input_pending, "seat":seat, "players":snap.num_players,
             "round":format!("{}{}局 · {}本场", snap.bakaze, snap.kyoku, snap.honba),
             "turn":snap.turn_count, "hand":own.tehai, "canAct":can_act,
             "analysis":analysis, "recommendations":recommendations,
             "elapsedMs":begin.elapsed().as_millis() as u64,
             "model":if self.engine.as_ref().is_some_and(Engine::uses_external_policy) { "自定义 ONNX 策略" } else { "Akagi 内置策略" },
             "modelFallback":custom_fallback, "estimated":true,
+            "autoContext":{"wind":snap.bakaze,"kyoku":snap.kyoku,"honba":snap.honba,
+                "drawnTile":own.drawn_tile,"riichi":own.riichi_declared || own.riichi_stage},
         }))
     }
 }
@@ -194,7 +206,11 @@ fn action_json(action: &BotAction, probability: f32) -> Value {
         BotAction::Kita => ("kita", "N"),
         BotAction::Pass => ("pass", ""),
     };
-    json!({"kind":kind, "tile":tile, "policyProbability":probability})
+    let mut result = json!({"kind":kind, "tile":tile, "policyProbability":probability});
+    if let BotAction::Dahai { tsumogiri, .. } = action {
+        result["tsumogiri"] = json!(tsumogiri);
+    }
+    result
 }
 
 fn demo() -> anyhow::Result<Value> {
@@ -395,5 +411,27 @@ mod tests {
         assert_eq!(result["status"], "waiting");
         assert!(host.engine.is_none());
         assert!(host.active.is_none());
+    }
+
+    #[test]
+    fn user_input_disables_advice_and_preserves_verification_fields() {
+        let mut host = Assistant::new();
+        authenticate(&mut host, 4);
+        live_round(&mut host, 4);
+        let req = proto("lq.ReqSelfOperation", json!({"type":1,"tile":"0m","moqie":true}));
+        let result = host.frame(7, 1, &wire(2, 10, ".lq.FastTest.inputOperation", &req)).unwrap().unwrap();
+        assert_eq!(result["inputPending"], true);
+        assert_eq!(result["canAct"], false);
+        assert_eq!(result["input"]["payload"]["tile"], "0m");
+        assert_eq!(result["input"]["payload"]["moqie"], true);
+        assert_eq!(result["connection"], "7");
+    }
+
+    #[test]
+    fn ordinary_discards_preserve_red_identity_and_tsumogiri() {
+        let result = action_json(&BotAction::Dahai { pai:"5mr".into(), tsumogiri:true }, 0.7);
+        assert_eq!(result["tile"], "5mr");
+        assert_eq!(result["tsumogiri"], true);
+        assert!(action_json(&BotAction::Reach { pai:"5mr".into() }, 0.7).get("tsumogiri").is_none());
     }
 }

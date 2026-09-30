@@ -325,6 +325,11 @@ pub extern "C" fn majmax_capture_configure() {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn majmax_capture_is_current(generation: u64, connection: u64, sequence: u64) -> bool {
+    capture::is_current(generation, connection, sequence)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn majmax_capture_set_endpoint(
     port: u32,
     token: *const u8,

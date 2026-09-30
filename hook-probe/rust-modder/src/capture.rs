@@ -3,6 +3,7 @@
 #[cfg(target_os = "android")]
 mod android {
     use std::{
+        collections::HashMap,
         io::Write,
         net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
         sync::{
@@ -20,6 +21,7 @@ mod android {
     static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
     static ENDPOINT: OnceLock<Mutex<Option<Endpoint>>> = OnceLock::new();
     static SENDER: OnceLock<Mutex<SyncSender<Frame>>> = OnceLock::new();
+    static SEQUENCES: OnceLock<Mutex<HashMap<u64, u64>>> = OnceLock::new();
 
     #[derive(Clone, PartialEq, Eq)]
     struct Endpoint {
@@ -28,6 +30,8 @@ mod android {
     }
 
     struct Frame {
+        generation: u64,
+        sequence: u64,
         connection: u64,
         kind: u8,
         data: Vec<u8>,
@@ -89,6 +93,8 @@ mod android {
                     let frame = match rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(frame) => frame,
                         Err(mpsc::RecvTimeoutError::Timeout) => Frame {
+                            generation: GENERATION.load(Ordering::SeqCst),
+                            sequence: 0,
                             connection: 0,
                             kind: 4,
                             data: Vec::new(),
@@ -137,11 +143,12 @@ mod android {
     fn write_frame(stream: &mut TcpStream, frame: &Frame) -> std::io::Result<()> {
         // Network byte order: payload length, loss/reconnect generation,
         // opaque connection ID, direction (0 down / 1 up / 2 close / 4 ping).
-        let mut header = [0u8; 21];
+        let mut header = [0u8; 29];
         header[..4].copy_from_slice(&(frame.data.len() as u32).to_be_bytes());
-        header[4..12].copy_from_slice(&GENERATION.load(Ordering::SeqCst).to_be_bytes());
+        header[4..12].copy_from_slice(&frame.generation.to_be_bytes());
         header[12..20].copy_from_slice(&frame.connection.to_be_bytes());
-        header[20] = frame.kind;
+        header[20..28].copy_from_slice(&frame.sequence.to_be_bytes());
+        header[28] = frame.kind;
         stream.write_all(&header)?;
         stream.write_all(&frame.data)
     }
@@ -160,7 +167,19 @@ mod android {
             GENERATION.fetch_add(1, Ordering::SeqCst);
             return;
         };
+        let Ok(mut sequences) = SEQUENCES.get_or_init(|| Mutex::new(HashMap::new())).try_lock() else {
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+            return;
+        };
+        if sequences.len() >= 32 && !sequences.contains_key(&(connection as u64)) {
+            sequences.clear();
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+        }
+        let sequence = sequences.entry(connection as u64).or_default();
+        *sequence += 1;
         let frame = Frame {
+            generation: GENERATION.load(Ordering::SeqCst),
+            sequence: *sequence,
             connection: connection as u64,
             kind,
             data: data.to_vec(),
@@ -168,14 +187,24 @@ mod android {
         if sender.try_send(frame).is_err() {
             GENERATION.fetch_add(1, Ordering::SeqCst);
         }
+        if kind == 2 { sequences.remove(&(connection as u64)); }
+    }
+
+    /// Revalidate immediately before using the game's normal Lua input path.
+    pub fn is_current(generation: u64, connection: u64, sequence: u64) -> bool {
+        CONNECTED.load(Ordering::SeqCst) && GENERATION.load(Ordering::SeqCst) == generation &&
+            SEQUENCES.get().and_then(|map| map.try_lock().ok())
+                .is_some_and(|map| map.get(&connection).copied() == Some(sequence))
     }
 }
 
 #[cfg(target_os = "android")]
-pub use android::{configure, publish, set_endpoint};
+pub use android::{configure, publish, set_endpoint, is_current};
 #[cfg(not(target_os = "android"))]
 pub fn configure() {}
 #[cfg(not(target_os = "android"))]
 pub fn set_endpoint(_: u16, _: &[u8]) {}
 #[cfg(not(target_os = "android"))]
 pub fn publish(_: usize, _: u8, _: &[u8]) {}
+#[cfg(not(target_os = "android"))]
+pub fn is_current(_: u64, _: u64, _: u64) -> bool { false }

@@ -27,6 +27,9 @@ class AiEndpointProvider : ContentProvider() {
             val ack = DiagnosticsStore.acceptHookBatch(app, payload)
             return Bundle().apply { putLong("ackSeq", ack) }
         }
+        if (method == "autoPoll") return Bundle().apply {
+            putString("command", AiOverlayService.autoPoll(extras?.getString("acks")))
+        }
         if (method != "endpoint") return null
         val endpoint = AiOverlayService.currentEndpoint()
         return Bundle().apply {

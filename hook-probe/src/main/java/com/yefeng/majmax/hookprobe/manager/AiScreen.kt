@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +53,7 @@ internal fun AiScreen(padding: PaddingValues) {
     var modelMessage by remember { mutableStateOf("仅接受符合 Akagi 策略协议的 ONNX 文件；PyTorch/Mortal 权重包不能只改后缀导入。模型仅保存在本机；和牌率、向听与放铳风险仍由 Akagi 分析计算。") }
     val scope = rememberCoroutineScope()
     val status by AiStatus.state.collectAsStateWithLifecycle()
+    val autoStatus by AutoDiscardState.state.collectAsStateWithLifecycle()
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
@@ -96,6 +98,19 @@ internal fun AiScreen(padding: PaddingValues) {
                     OutlinedButton(onClick = { start(true) }) { Text("本地模型自检") }
                     TextButton(onClick = { AiOverlayService.stop(context) }, enabled = status.running) { Text("停止助手") }
                 }
+            }
+        }
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("根据 AI 自动切牌", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    Switch(checked = autoStatus.enabled, enabled = status.running,
+                        onCheckedChange = { AiOverlayService.toggleAuto() })
+                }
+                Text(autoStatus.message)
+                Text("默认关闭，每次启动需手动开启。仅执行首选普通切牌；立直、鸣牌、和牌和跳过需手动。手动操作、重连、同步或模型异常时暂停。",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("可在悬浮窗一键暂停；收纳后点击“停”浮标会先暂停自动切牌。", style = MaterialTheme.typography.bodySmall)
             }
         }
         Text("策略模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

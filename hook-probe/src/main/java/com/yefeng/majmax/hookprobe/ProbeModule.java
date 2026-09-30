@@ -29,9 +29,9 @@ public final class ProbeModule extends XposedModule {
     private static final String TAG = "MajsoulProbe";
     private static final Uri AI_ENDPOINT_URI = Uri.parse(
             "content://com.yefeng.majmax.hookprobe.ai/capture");
-    private static final String ASSET_VERSION = "0.7.3-catalog2";
+    private static final String ASSET_VERSION = "0.8.0-autoplay3";
     private static final String[] VERSIONED_ASSETS = {
-            "max_data.yaml", "ui/MajsoulMaxSettings.lua"
+            "max_data.yaml", "ui/MajsoulMaxSettings.lua", "ui/MajsoulMaxAutoDiscard.lua"
     };
     private static final String[] USER_ASSETS = {"settings.mod.json"};
     private static final AtomicBoolean CONFIGURED = new AtomicBoolean();
@@ -48,6 +48,8 @@ public final class ProbeModule extends XposedModule {
 
     private static native int nativeConfigure(String configDir);
     private static native void nativeCaptureEndpoint(int port, byte[] token);
+    private static native void nativeAutoCommand(String command, long generation, long connection, long sequence);
+    private static native String nativeAutoResults();
 
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
@@ -145,7 +147,20 @@ public final class ProbeModule extends XposedModule {
                     aiEndpointPort = 0;
                     aiEndpointToken = new byte[0];
                 }
+                if (aiEndpointPort != 0) {
+                    Bundle report = new Bundle();
+                    report.putString("acks", nativeAutoResults());
+                    Bundle reply = gameContext.getContentResolver().call(AI_ENDPOINT_URI, "autoPoll", null, report);
+                    String command = reply == null ? null : reply.getString("command");
+                    JSONObject json = command == null ? null : new JSONObject(command);
+                    nativeAutoCommand(command, json == null ? 0 : json.getLong("sourceGeneration"),
+                            json == null ? 0 : Long.parseLong(json.getString("connection")),
+                            json == null ? 0 : json.getLong("sourceSequence"));
+                } else {
+                    nativeAutoCommand(null, 0, 0, 0);
+                }
             } catch (Throwable ignored) {
+                nativeAutoCommand(null, 0, 0, 0);
                 if (aiEndpointPort != 0) {
                     nativeCaptureEndpoint(0, new byte[0]);
                     HookDiagnostics.event("WARN", "hook.capture", "CAPTURE_ENDPOINT_LOST", new JSONObject());
@@ -154,7 +169,7 @@ public final class ProbeModule extends XposedModule {
                     aiEndpointToken = new byte[0];
                 }
             }
-        }, 0, 1, TimeUnit.SECONDS);
+        }, 0, 250, TimeUnit.MILLISECONDS);
     }
 
     private static void copyAsset(ZipFile moduleApk, String name, File directory,
