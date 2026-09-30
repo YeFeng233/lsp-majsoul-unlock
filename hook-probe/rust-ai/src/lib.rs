@@ -32,6 +32,8 @@ struct Assistant {
     input_pending: bool,
     revision: u64,
     step: u64,
+    operations: Value,
+    operation_seat: Option<u64>,
 }
 
 fn waiting(message: &str) -> Value {
@@ -43,6 +45,8 @@ impl Assistant {
         Self {
             flows: HashMap::new(), active: None, tracker: GameTracker::new(),
             engine: None, round_ready: false, input_pending: false, revision: 0, step: 0,
+            operations: json!([]),
+            operation_seat: None,
         }
     }
 
@@ -76,10 +80,15 @@ impl Assistant {
             } else { None });
         }
         let method = &parsed.parsed.as_ref().unwrap().method;
-        if direction == 0 && matches!(method.as_str(), ".lq.ActionPrototype" | ".lq.FastTest.syncGame") {
+        if direction == 0 && matches!(method.as_str(), ".lq.ActionPrototype" | ".lq.FastTest.syncGame")
+            && (self.active == Some(connection) || parsed.events.iter().any(|e| matches!(e, MjaiEvent::StartGame { .. }))) {
             if let Some(step) = parsed.parsed.as_ref().unwrap().args.pointer("/payload/step").and_then(Value::as_u64) {
                 self.step = step;
             }
+            self.operations = parsed.parsed.as_ref().unwrap().args
+                .pointer("/payload/data/operation/operation_list").cloned().unwrap_or_else(|| json!([]));
+            self.operation_seat = parsed.parsed.as_ref().unwrap().args
+                .pointer("/payload/data/operation").map(|op| op["seat"].as_u64().unwrap_or(0));
         }
         if self.active == Some(connection) && direction == 1 &&
             matches!(method.as_str(), ".lq.FastTest.inputOperation" | ".lq.FastTest.inputChiPengGang") {
@@ -186,8 +195,10 @@ impl Assistant {
             "elapsedMs":begin.elapsed().as_millis() as u64,
             "model":if self.engine.as_ref().is_some_and(Engine::uses_external_policy) { "自定义 ONNX 策略" } else { "Akagi 内置策略" },
             "modelFallback":custom_fallback, "estimated":true,
+            "legalOperations":if self.operation_seat == Some(seat as u64) { self.operations.clone() } else { json!([]) },
             "autoContext":{"wind":snap.bakaze,"kyoku":snap.kyoku,"honba":snap.honba,
-                "drawnTile":own.drawn_tile,"riichi":own.riichi_declared || own.riichi_stage},
+                "drawnTile":own.drawn_tile,"riichi":own.riichi_declared || own.riichi_stage,
+                "phase":snap.phase,"melds":own.melds},
         }))
     }
 }
@@ -209,6 +220,16 @@ fn action_json(action: &BotAction, probability: f32) -> Value {
     let mut result = json!({"kind":kind, "tile":tile, "policyProbability":probability});
     if let BotAction::Dahai { tsumogiri, .. } = action {
         result["tsumogiri"] = json!(tsumogiri);
+    }
+    match action {
+        BotAction::Pon {target, consumed, ..} | BotAction::Chi {target, consumed, ..}
+            | BotAction::Daiminkan {target, consumed, ..} => {
+                result["target"] = json!(target);
+                result["consumed"] = json!(consumed);
+            }
+        BotAction::Ankan {consumed} | BotAction::Kakan {consumed, ..} => result["consumed"] = json!(consumed),
+        BotAction::Hora {target} => result["target"] = json!(target),
+        _ => {},
     }
     result
 }
@@ -303,6 +324,25 @@ mod tests {
     use prost::Message;
     use prost_reflect::DynamicMessage;
 
+    #[test]
+    fn automation_actions_preserve_target_and_consumed_red_tiles() {
+        let pon = action_json(&BotAction::Pon {target:2,pai:"5m".into(),consumed:vec!["5m".into(),"5mr".into()]}, 0.8);
+        assert_eq!(pon["target"], 2);
+        assert_eq!(pon["consumed"], json!(["5m","5mr"]));
+        assert_eq!(action_json(&BotAction::Hora {target:3}, 1.0)["target"], 3);
+        assert_eq!(action_json(&BotAction::Ankan {consumed:vec!["5mr".into()]}, 1.0)["consumed"], json!(["5mr"]));
+    }
+
+    #[test]
+    fn automation_requires_server_operations_for_our_seat() {
+        let mut host = Assistant::new();
+        authenticate(&mut host, 4);
+        let state = live_round(&mut host, 4);
+        assert_eq!(state["legalOperations"][0]["type"], 1);
+        host.operation_seat = Some(1);
+        assert_eq!(host.render().unwrap()["legalOperations"], json!([]));
+    }
+
     fn proto(name: &str, value: Value) -> Vec<u8> {
         let descriptor = POOL.get_message_by_name(name.trim_start_matches('.')).unwrap();
         let text = value.to_string();
@@ -337,7 +377,8 @@ mod tests {
             vec!["1p","2p","3p","4p","5p","6p","7s","8s","9s","1s","1s","1m","1m","9m"]
         };
         proto("lq.ActionNewRound", json!({"tiles":tiles,"scores":vec![25000;players as usize],
-            "doras":["9p"],"ju":0,"chang":0,"left_tile_count":69}))
+            "doras":["9p"],"ju":0,"chang":0,"left_tile_count":69,
+            "operation":{"seat":0,"operation_list":[{"type":1}]}}))
     }
 
     fn live_round(host: &mut Assistant, players: u8) -> Value {

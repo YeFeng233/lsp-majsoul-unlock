@@ -92,7 +92,7 @@ class AiOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        auto.pause("自动切牌默认关闭；同步牌局后可手动开启")
+        auto.pause("自动操作默认关闭；同步牌局后可手动开启")
         OnnxModelStore.initialize(this)
         DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "SERVICE_STARTED")
         val notifications = getSystemService(NotificationManager::class.java)
@@ -135,7 +135,7 @@ class AiOverlayService : Service() {
     }
 
     private fun reset(message: String) {
-        auto.invalidate("连接或同步已变化，自动切牌已暂停")
+        auto.invalidate("连接或同步已变化，自动操作已暂停")
         val generation = epoch.incrementAndGet()
         queue.clear()
         val ticket = revision.incrementAndGet()
@@ -250,7 +250,7 @@ class AiOverlayService : Service() {
         } catch (_: InterruptedException) {
             // Normal service shutdown.
         } catch (_: Throwable) {
-            auto.invalidate("本地引擎异常，自动切牌已暂停")
+            auto.invalidate("本地引擎异常，自动操作已暂停")
             val failed = JSONObject().put("status", "error").put("message", "本地引擎加载失败，请停止助手并重启管理应用")
             post(failed, epoch.get(), revision.get())
         }
@@ -271,7 +271,7 @@ class AiOverlayService : Service() {
 
     override fun onDestroy() {
         alive.set(false)
-        auto.invalidate("助手已停止，自动切牌已暂停")
+        auto.invalidate("助手已停止，自动操作已暂停")
         instance = null
         epoch.incrementAndGet()
         advertisedEndpoint = null

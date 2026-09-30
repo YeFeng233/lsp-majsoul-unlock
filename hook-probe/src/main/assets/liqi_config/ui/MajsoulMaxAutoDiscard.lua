@@ -53,7 +53,7 @@ local function execute(command)
     if not d or not r or not enums or not ops or not d.gameing or not DesktopMgr.IsActive()
             or d.mode ~= enums.play or d.duringReconnect or d.time_stopped or not MJNetMgr.Inst:IsOK() then return end
     -- The network snapshot arrives before the game's draw animation finishes.
-    if not r._can_discard or d.current_step ~= command.step then return end
+    if d.current_step ~= command.step then return end
     if r._mouse_downed or r._during_drag then mark(id); ack(id, 'manual'); return end
     if r._during_liqi or r._during_reveal or r._during_reveal_liqi then
         mark(id); ack(id, 'special_selection'); return
@@ -69,13 +69,22 @@ local function execute(command)
             tostring(d.seat), tostring(command.seat+1), tostring(d.index_chang), tostring(winds[context.wind]),
             tostring(d.index_ju), tostring(context.kyoku), tostring(d.index_ben), tostring(context.honba))); return
     end
-    local discard = false
-    for _, operation in ipairs(d.oplist or {}) do
-        if operation.type == ops.dapai then discard = true end
-        -- Do not automatically pass a winning or special selection window.
-        if operation.type == ops.zimo or operation.type == ops.rong then mark(id); ack(id, 'win_available'); return end
+    local action = command.action
+    if type(action) ~= 'table' then mark(id); ack(id, 'unknown_action'); return end
+    local kind, operation = action.kind, nil
+    for _, op in ipairs(d.oplist or {}) do
+        if op.type == action.type then operation = op end
     end
-    if not discard or type(r._DoDiscardTile) ~= 'function' or type(r._setChoosePai) ~= 'function' then return end
+    if kind ~= 'pass' and not operation then return end
+    if kind == 'discard' or kind == 'riichi' then
+        if not r._can_discard or type(r._DoDiscardTile) ~= 'function' or type(r._setChoosePai) ~= 'function' then return end
+        -- A winning window must be handled by the explicit AI recommendation.
+        for _, op in ipairs(d.oplist or {}) do
+            if kind == 'discard' and (op.type == ops.zimo or op.type == ops.rong) then
+                mark(id); ack(id, 'win_available'); return
+            end
+        end
+    end
     local actual, expected, selected = {}, {}, nil
     for _, value in ipairs(command.hand or {}) do
         local name = tile(value)
@@ -94,16 +103,98 @@ local function execute(command)
     if #expected == 0 or table.concat(actual, ',') ~= table.concat(expected, ',') then
         mark(id); ack(id, 'hand_mismatch'); return
     end
-    if not selected then mark(id); ack(id, 'illegal_tile'); return end
+    local own = UI_LiqiZimo and UI_LiqiZimo.Inst
+    local claim = UI_ChiPengHu and UI_ChiPengHu.Inst
+    local function ready(ui)
+        return ui and ui.transform and ui.transform.gameObject.activeInHierarchy and not ui.on_do_operation
+            and ui.container_btns and ui.container_btns.transform.gameObject.activeInHierarchy
+    end
+    local function button(ui, name, method)
+        local btn = ui and ui.container_btns and ui.container_btns[name]
+        return ready(ui) and btn and btn.transform.gameObject.activeInHierarchy
+            and type(ui.container_btns[method]) == 'function'
+    end
+    local run
+    if kind == 'discard' or kind == 'riichi' then
+        if not selected then mark(id); ack(id, 'illegal_tile'); return end
+        if kind == 'riichi' then
+            if not button(own, 'btn_lizhi', 'Btn_Lizhi') then return end
+            local found = false
+            for _, value in ipairs(operation.combination or {}) do if value:gsub('0','5') == action.tile:gsub('0','5') then found = true end end
+            if not found then mark(id); ack(id, 'illegal_combination'); return end
+            -- DesktopMgr builds liqi_select from the current server operation list.
+            local valid = false
+            for _, value in ipairs(d.liqi_select or {}) do if value:ToString():gsub('0','5') == action.tile:gsub('0','5') then valid = true end end
+            if not valid then return end
+        end
+        run = function()
+            if kind == 'riichi' then
+                own.container_btns:Btn_Lizhi(ops.liqi)
+                if not r._during_liqi then error('riichi selection did not activate') end
+            end
+            if not selected.valid then error('riichi tile unavailable') end
+            r:_setChoosePai(selected, false); r:_DoDiscardTile()
+            if type(r._resetMouseState) == 'function' then r:_resetMouseState() end
+        end
+    elseif kind == 'chi' or kind == 'pon' or kind == 'kan' then
+        if not ready(claim) then return end
+        if not d.lastqipai or d.lastqipai:ToString() ~= action.tile or d.lastqipai_seat ~= action.target + 1 then
+            mark(id); ack(id, 'target_mismatch'); return
+        end
+        local index = action.index
+        if type(index) ~= 'number' or index < 0 or index % 1 ~= 0
+                or (operation.combination or {})[index+1] ~= action.combination then
+            mark(id); ack(id, 'illegal_combination'); return
+        end
+        if kind == 'kan' then
+            if index ~= 0 or not button(claim, 'btn_gang', 'Btn_Gang') then return end
+            run = function() claim.container_btns:Btn_Gang() end
+        else
+            local values = claim.data and claim.data[kind == 'chi' and 'chi' or 'peng']
+            if not values or values[index+1] ~= action.combination then return end
+            if type(claim.OnClickDetail) ~= 'function' then return end
+            run = function() claim.choosed_op = action.type; claim:OnClickDetail(index, 1) end
+        end
+    elseif kind == 'ankan' or kind == 'kakan' then
+        if not ready(own) or type(own.OnClickDetail) ~= 'function' then return end
+        local values = kind == 'ankan' and own.com_an_gang or own.com_add_gang
+        local index = action.index
+        if type(index) ~= 'number' or index < 0 or index % 1 ~= 0
+                or (operation.combination or {})[index+1] ~= action.combination then
+            mark(id); ack(id, 'illegal_combination'); return
+        end
+        if not values or values[index+1] ~= action.combination then return end
+        local offset = kind == 'ankan' and #(own.com_add_gang or {}) or 0
+        run = function() own:OnClickDetail(index + offset) end
+    elseif kind == 'hora' then
+        if action.target == command.seat and action.type == ops.zimo then
+            if not button(own, 'btn_zimo', 'Btn_Zimo') then return end
+            run = function() own.container_btns:Btn_Zimo() end
+        elseif action.target ~= command.seat and action.type == ops.rong then
+            if not button(claim, 'btn_hu', 'Btn_Hu') then return end
+            run = function() claim.container_btns:Btn_Hu() end
+        end
+    elseif kind == 'kita' then
+        if not button(own, 'btn_babei', 'Btn_Babei') then return end
+        local north = false
+        for _, value in ipairs(actual) do if value == '4z' then north = true end end
+        if not north or action.moqie ~= (r._last_tile ~= nil and r._last_tile.pai:ToString() == '4z') then
+            mark(id); ack(id, 'illegal_tile'); return
+        end
+        run = function() own.container_btns:Btn_Babei() end
+    elseif kind == 'abort' then
+        if not button(own, 'btn_jiuzhongjiupai', 'Btn_JiuZhongJiuPai') then return end
+        run = function() own.container_btns:Btn_JiuZhongJiuPai() end
+    elseif kind == 'pass' then
+        if action.method ~= 'inputChiPengGang' or not button(claim, 'btn_cancel', 'Btn_Cancel') then return end
+        run = function() claim.container_btns:Btn_Cancel() end
+    end
+    if not run then mark(id); ack(id, 'unknown_action'); return end
     -- Recheck after all game-side checks and immediately before committing.
     if __majmax_auto_current() ~= 'yes' then mark(id); ack(id, 'stale'); return end
     mark(id)
     A.executing = id
-    local ok = pcall(function()
-        r:_setChoosePai(selected, false)
-        r:_DoDiscardTile()
-        if type(r._resetMouseState) == 'function' then r:_resetMouseState() end
-    end)
+    local ok = pcall(run)
     A.executing = nil
     if not ok then ack(id, 'game_exception') end
 end

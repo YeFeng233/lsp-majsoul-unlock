@@ -103,14 +103,14 @@ internal fun AiScreen(padding: PaddingValues) {
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("根据 AI 自动切牌", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    Text("根据 AI 自动操作", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                     Switch(checked = autoStatus.enabled, enabled = status.running,
                         onCheckedChange = { AiOverlayService.toggleAuto() })
                 }
                 Text(autoStatus.message)
-                Text("默认关闭，每次启动需手动开启。仅执行首选普通切牌；立直、鸣牌、和牌和跳过需手动。手动操作、重连、同步或模型异常时暂停。",
+                Text("默认关闭，每次启动需手动开启。执行 AI 首选切牌、立直、吃碰杠、和牌、拔北及跳过。手动操作、重连、同步或模型异常时暂停。",
                     style = MaterialTheme.typography.bodySmall)
-                Text("可在悬浮窗一键暂停；收纳后点击“停”浮标会先暂停自动切牌。", style = MaterialTheme.typography.bodySmall)
+                Text("可在悬浮窗一键暂停；收纳后点击“停”浮标会先暂停自动操作。", style = MaterialTheme.typography.bodySmall)
             }
         }
         Text("策略模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

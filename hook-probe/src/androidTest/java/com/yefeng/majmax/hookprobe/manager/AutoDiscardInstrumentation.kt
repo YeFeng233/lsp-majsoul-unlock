@@ -22,7 +22,8 @@ class AutoDiscardInstrumentation : Instrumentation() {
             }
             fun live(revision: Int = 1, kind: String = "discard") = JSONObject("""
                 {"status":"live","canAct":true,"connection":"7","revision":$revision,
-                 "sourceGeneration":3,"sourceSequence":8,"hand":["5mr"],
+                 "sourceGeneration":3,"sourceSequence":8,"seat":0,"players":4,"hand":["5mr"],
+                 "legalOperations":[{"type":1,"combination":[]}],
                  "autoContext":{"riichi":false},
                  "recommendations":[{"kind":"$kind","tile":"5mr","tsumogiri":false}]}
             """.trimIndent())
@@ -55,7 +56,7 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 gate.observe(live()); gate.toggle(); gate.observe(live().put("modelFallback",true))
                 check(gate.poll(null) == null && !AutoDiscardState.mutable.value.enabled)
             }
-            test("riichi recommendation remains manual") { gate, _ ->
+            test("riichi requires a server declaration prompt") { gate, _ ->
                 gate.observe(live(kind="riichi")); gate.toggle(); check(gate.poll(null) == null)
             }
             test("timeout pauses without retry") { gate, advance ->
@@ -82,6 +83,78 @@ class AutoDiscardInstrumentation : Instrumentation() {
                     {"method":".lq.FastTest.inputOperation","payload":{"type":1,"tile":"5m","moqie":false}}
                 """)))
                 check(gate.poll(null) == null && !AutoDiscardState.mutable.value.enabled)
+            }
+            fun actionCase(kind: String, type: Int, tile: String = "", consumed: List<String> = emptyList(),
+                           combo: List<String> = emptyList(), hand: List<String> = listOf("5mr"), target: Int = 3,
+                           response: Boolean = true): JSONObject {
+                val state=live(kind=kind).put("hand",JSONArray(hand))
+                state.getJSONObject("autoContext").put("phase",if(response) "wait_response" else "wait_act").put("drawnTile","5mr")
+                state.put("legalOperations",JSONArray().put(JSONObject().put("type",type).put("combination",JSONArray(combo))))
+                state.put("recommendations",JSONArray().put(JSONObject().put("kind",kind).put("tile",tile)
+                    .put("target",target).put("consumed",JSONArray(consumed))))
+                return state
+            }
+            fun prepared(state: JSONObject) = checkNotNull(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0)))
+            test("riichi retains red tile and declaration type") { gate, _ ->
+                val state=actionCase("riichi",7,"5mr",combo=listOf("5m"),response=false)
+                gate.observe(state); gate.toggle()
+                val cmd=JSONObject(checkNotNull(gate.poll(null)))
+                check(cmd.getJSONObject("action").getInt("type")==7 && cmd.getBoolean("tsumogiri"))
+                check(!AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputOperation",JSONObject("""{"type":1,"tile":"0m","moqie":true}""")))
+                check(AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputOperation",JSONObject("""{"type":7,"tile":"0m","moqie":true}""")))
+            }
+            test("chi selects exact red combination index") { _, _ ->
+                val state=actionCase("chi",2,"3m",listOf("4m","5mr"),listOf("4m|5m","0m|4m"),listOf("4m","5mr"))
+                check(prepared(state).getInt("index")==1)
+                state.getJSONArray("recommendations").getJSONObject(0).put("consumed",JSONArray(listOf("4m","5m")))
+                check(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0))==null)
+            }
+            test("pon and open kan retain target and consumed tiles") { _, _ ->
+                for ((kind,type,n) in listOf(Triple("pon",3,2),Triple("kan",5,3))) {
+                    val tiles=List(n){"5m"}; val state=actionCase(kind,type,"5m",tiles,listOf(List(n){"5m"}.joinToString("|")),tiles)
+                    check(prepared(state).getInt("index")==0 && prepared(state).getInt("target")==3)
+                    state.getJSONArray("recommendations").getJSONObject(0).put("target",0)
+                    check(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0))==null)
+                }
+            }
+            test("ankan requires all four exact tiles") { _, _ ->
+                val tiles=listOf("5m","5m","5m","5mr")
+                check(prepared(actionCase("ankan",4,"5m",tiles,listOf("5m|0m|5m|5m"),tiles,response=false)).getInt("index")==0)
+            }
+            test("kakan accounts for red tile in the existing pon") { _, _ ->
+                val state=actionCase("kakan",6,"5m",listOf("5m","5mr","5m"),listOf("5m|5m|0m|5m"),listOf("5m"),response=false)
+                state.getJSONObject("autoContext").put("melds",JSONArray().put(JSONObject().put("kind","pon").put("tiles",JSONArray(listOf("5m","5mr","5m")))))
+                check(prepared(state).getInt("index")==0)
+            }
+            test("ron and tsumo use distinct request methods") { _, _ ->
+                check(prepared(actionCase("hora",9,target=3)).getString("method")=="inputChiPengGang")
+                check(prepared(actionCase("hora",8,target=0,response=false)).getString("method")=="inputOperation")
+            }
+            test("pass sends an explicit cancel and never confirms a win") { _, _ ->
+                val state=actionCase("pass",2)
+                val cmd=JSONObject().put("action",prepared(state))
+                check(AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputChiPengGang",JSONObject().put("cancel_operation",true)))
+                check(!AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputChiPengGang",JSONObject().put("type",9)))
+            }
+            test("kita is sanma only and preserves moqie") { _, _ ->
+                val state=actionCase("kita",11,"N",hand=listOf("N"),response=false)
+                state.put("players",3); state.getJSONObject("autoContext").put("drawnTile","N")
+                val cmd=JSONObject().put("action",prepared(state))
+                check(AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputOperation",JSONObject().put("type",11).put("moqie",true)))
+                state.put("players",4)
+                check(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0))==null)
+            }
+            test("abort requires server nine terminals prompt") { _, _ ->
+                check(prepared(actionCase("abort",10,response=false)).getInt("type")==10)
+            }
+            test("changed combination index cannot confirm another call") { gate, _ ->
+                gate.observe(actionCase("chi",2,"3m",listOf("4m","5mr"),listOf("4m|5m","4m|0m"),listOf("4m","5mr"))); gate.toggle()
+                gate.observe(live().put("input",JSONObject("""{"method":".lq.FastTest.inputChiPengGang","payload":{"type":2,"index":0}}""")))
+                check(!AutoDiscardState.mutable.value.enabled)
+            }
+            test("riichi locks ordinary discard to drawn tile") { _, _ ->
+                val state=live(); state.getJSONObject("autoContext").put("riichi",true)
+                check(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0))==null)
             }
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)

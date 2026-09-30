@@ -52,7 +52,7 @@ jobs:
       - name: Test Android emoji compatibility
         run: lua5.1 tools/tests/test_emoji_compat.lua
 
-      - name: Test automatic discard safeguards
+      - name: Test automatic operation safeguards
         run: lua5.1 tools/tests/test_auto_discard.lua
 
       - name: Set up Rust
