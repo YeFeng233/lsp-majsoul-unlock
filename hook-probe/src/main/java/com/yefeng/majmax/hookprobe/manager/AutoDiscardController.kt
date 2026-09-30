@@ -14,12 +14,14 @@ object AutoDiscardState {
 
 /** One pending command, one attempt per decision window; never retries an input. */
 internal class AutoDiscardController(private val log: (String) -> Unit,
-    private val now: () -> Long = SystemClock::elapsedRealtime) {
+    private val now: () -> Long = SystemClock::elapsedRealtime,
+    private val delayMs: () -> Long = { java.util.concurrent.ThreadLocalRandom.current().nextLong(2_000, 5_001) }) {
     private var enabled = false
     private var latest: JSONObject? = null
     private var pending: JSONObject? = null
     private var attempted = ""
     private var pendingAt = 0L
+    private var notBefore = 0L
     private var serial = UUID.randomUUID().toString()
     private var count = 0L
     private var wireConfirmed = false
@@ -69,7 +71,18 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
         }
         val command = pending
         if (command != null) {
-            if (now() - pendingAt > 6_000) {
+            if (!submitted && !wireConfirmed) {
+                if (result.optLong("revision") != command.optLong("revision") ||
+                    result.optLong("step") != command.optLong("step") ||
+                    result.optString("connection") != command.optString("connection") ||
+                    result.optLong("sourceGeneration") != command.optLong("sourceGeneration")) {
+                    pause("等待期间牌局已变化，自动操作已暂停")
+                    return
+                }
+                // Only parsed frames with unchanged decision/step renew proof.
+                command.put("sourceSequence", result.optLong("sourceSequence"))
+            }
+            if (now() - pendingAt > 12_000) {
                 pause("操作确认超时，已暂停；请手动检查")
             } else if (wireConfirmed && accepted && result.optLong("revision") != command.optLong("revision")) {
                 pending = null
@@ -95,14 +108,17 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
         attempted = key
         wireConfirmed = false; submitted = false; accepted = false
         pendingAt = now()
+        val delay = delayMs()
+        notBefore = pendingAt + delay
         pending = JSONObject(result.toString()).apply {
             remove("analysis"); remove("recommendations"); remove("input")
             put("id", "$serial-${++count}")
             put("action", action)
+            put("delayMs", delay)
             put("gameTile", action.optString("tile")); put("tsumogiri", action.optBoolean("moqie"))
         }
-        log("QUEUED id=${pending!!.optString("id")} kind=${action.optString("kind")}")
-        AutoDiscardState.mutable.value = AutoDiscardStatus(true, "等待游戏操作窗口 · 可随时暂停")
+        log("QUEUED kind=${action.optString("kind")} delayMs=$delay id=${pending!!.optString("id")}")
+        AutoDiscardState.mutable.value = AutoDiscardStatus(true, "随机等待 ${"%.1f".format(delay / 1000.0)} 秒 · 可随时暂停")
     }
 
     @Synchronized fun poll(acknowledgements: String?): String? {
@@ -141,8 +157,8 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
             pending = null
             latest?.let(::offer)
         }
-        if (pending != null && now() - pendingAt > 6_000) pause("操作确认超时，已暂停；请手动检查")
-        return if (enabled && !submitted && !wireConfirmed) pending?.toString() else null
+        if (pending != null && now() - pendingAt > 12_000) pause("操作确认超时，已暂停；请手动检查")
+        return if (enabled && !submitted && !wireConfirmed && now() >= notBefore) pending?.toString() else null
     }
 
     companion object {

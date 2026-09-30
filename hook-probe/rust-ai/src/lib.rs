@@ -103,7 +103,10 @@ impl Assistant {
                 parsed.parsed.as_ref().unwrap().args.pointer("/payload/name").and_then(Value::as_str) != Some("ActionMJStart") {
                 return Ok(Some(self.invalidate("遇到未支持的牌局事件，已暂停建议")));
             }
-            return Ok(None);
+            // A parsed non-action RPC (e.g. heartbeat) advances capture sequence,
+            // but not the decision. Publish proof of that unchanged state so a
+            // delayed command can renew its transport sequence without retrying.
+            return if self.active == Some(connection) { Ok(Some(self.render()?)) } else { Ok(None) };
         }
         if self.active != Some(connection) && !parsed.events.iter().any(|e|
             matches!(e, MjaiEvent::StartGame { id: Some(_), .. })) {
@@ -341,6 +344,17 @@ mod tests {
         assert_eq!(state["legalOperations"][0]["type"], 1);
         host.operation_seat = Some(1);
         assert_eq!(host.render().unwrap()["legalOperations"], json!([]));
+    }
+
+    #[test]
+    fn unrelated_rpc_refreshes_capture_proof_without_changing_decision() {
+        let mut host = Assistant::new();
+        authenticate(&mut host, 4);
+        let before = live_round(&mut host, 4);
+        let after = rpc(&mut host, ".lq.FastTest.checkNetworkDelay", json!({}), json!({})).unwrap();
+        for key in ["revision", "step", "hand", "legalOperations", "recommendations"] {
+            assert_eq!(before[key], after[key], "changed {key}");
+        }
     }
 
     fn proto(name: &str, value: Value) -> Vec<u8> {

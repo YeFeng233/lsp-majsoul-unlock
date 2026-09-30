@@ -14,9 +14,9 @@ class AutoDiscardInstrumentation : Instrumentation() {
             var tests = 0
             fun test(name: String, run: (AutoDiscardController, () -> Unit) -> Unit) {
                 var time = 0L
-                val gate = AutoDiscardController({}, { time })
+                val gate = AutoDiscardController({}, { time }, { 0L })
                 gate.invalidate("test reset")
-                run(gate) { time += 6_001 }
+                run(gate) { time += 12_001 }
                 tests++
                 sendStatus(0, Bundle().apply { putString("stream", "PASS $name\n") })
             }
@@ -155,6 +155,43 @@ class AutoDiscardInstrumentation : Instrumentation() {
             test("riichi locks ordinary discard to drawn tile") { _, _ ->
                 val state=live(); state.getJSONObject("autoContext").put("riichi",true)
                 check(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0))==null)
+            }
+            test("queued actions wait for their full random delay") { _, _ ->
+                for (delay in listOf(2_000L,5_000L)) {
+                    var time=0L
+                    val gate=AutoDiscardController({}, {time}, {delay})
+                    gate.observe(live()); gate.toggle(); check(gate.poll(null)==null)
+                    time=delay-1; check(gate.poll(null)==null)
+                    time=delay; check(JSONObject(checkNotNull(gate.poll(null))).getLong("delayMs")==delay)
+                }
+            }
+            test("heartbeat renews sequence without restarting delay") { _, _ ->
+                var time=0L
+                val gate=AutoDiscardController({}, {time}, {2_000L})
+                gate.observe(live()); gate.toggle()
+                time=1_500; gate.observe(live().put("sourceSequence",9)); check(gate.poll(null)==null)
+                time=2_000; check(JSONObject(checkNotNull(gate.poll(null))).getLong("sourceSequence")==9L)
+            }
+            test("changed decision during delay pauses") { _, _ ->
+                var time=0L
+                val gate=AutoDiscardController({}, {time}, {2_000L})
+                gate.observe(live()); gate.toggle(); gate.observe(live(2))
+                time=2_000; check(gate.poll(null)==null && !AutoDiscardState.mutable.value.enabled)
+            }
+            test("pause during delay never publishes input") { _, _ ->
+                var time=0L
+                val gate=AutoDiscardController({}, {time}, {5_000L})
+                gate.observe(live()); gate.toggle(); gate.pause("manual")
+                time=5_000; check(gate.poll(null)==null)
+            }
+            test("production random delay always stays within two to five seconds") { _, _ ->
+                repeat(30) {
+                    var time=0L
+                    val gate=AutoDiscardController({}, {time})
+                    gate.observe(live()); gate.toggle(); check(gate.poll(null)==null)
+                    time=5_000
+                    check(JSONObject(checkNotNull(gate.poll(null))).getLong("delayMs") in 2_000L..5_000L)
+                }
             }
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)
