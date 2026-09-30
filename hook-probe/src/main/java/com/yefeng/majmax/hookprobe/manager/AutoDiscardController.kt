@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.util.UUID
 
-data class AutoDiscardStatus(val enabled: Boolean = false, val message: String = "自动操作已暂停")
+data class AutoDiscardStatus(val enabled: Boolean = false, val message: String = "无人值守模式已关闭")
 object AutoDiscardState {
     internal val mutable = MutableStateFlow(AutoDiscardStatus())
     val state = mutable.asStateFlow()
@@ -15,8 +15,9 @@ object AutoDiscardState {
 /** One pending command, one attempt per decision window; never retries an input. */
 internal class AutoDiscardController(private val log: (String) -> Unit,
     private val now: () -> Long = SystemClock::elapsedRealtime,
-    private val delayMs: () -> Long = { java.util.concurrent.ThreadLocalRandom.current().nextLong(2_000, 5_001) }) {
-    private var enabled = false
+    private val delayMs: () -> Long = { java.util.concurrent.ThreadLocalRandom.current().nextLong(2_000, 5_001) },
+    initialEnabled: Boolean = false, private val modeChanged: (Boolean) -> Unit = {}) {
+    private var enabled = initialEnabled
     private var latest: JSONObject? = null
     private var pending: JSONObject? = null
     private var attempted = ""
@@ -31,37 +32,52 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
     @Synchronized fun pause(reason: String) {
         if (enabled || pending != null) log("PAUSED: $reason")
         enabled = false; pending = null
+        modeChanged(false)
         AutoDiscardState.mutable.value = AutoDiscardStatus(false, reason)
+    }
+
+    init {
+        AutoDiscardState.mutable.value = AutoDiscardStatus(enabled,
+            if (enabled) "无人值守模式已恢复 · 等待完整牌局同步" else "无人值守模式已关闭")
+    }
+
+    @Synchronized fun isEnabled() = enabled
+    @Synchronized fun needsSync() = enabled && latest?.optString("status") != "live"
+    /** Temporary loss of trustworthy state keeps the user's opt-in, but revokes the action. */
+    @Synchronized fun suspend(reason: String) {
+        if (enabled && (pending != null || latest != null)) log("WAITING: $reason")
+        pending = null; latest = null
+        AutoDiscardState.mutable.value = AutoDiscardStatus(enabled, reason)
     }
 
     @Synchronized fun invalidate(reason: String) {
         latest = null
-        pause(reason)
+        suspend(reason)
     }
 
     @Synchronized fun toggle() {
-        if (enabled) { pause("已手动暂停自动操作"); return }
+        if (enabled) { pause("已手动关闭无人值守模式"); return }
         val state = latest
-        if (state == null || state.optString("status") != "live" || state.optBoolean("modelFallback")) {
-            pause("请先连接并同步实时牌局，再开启自动操作"); return
-        }
         enabled = true
-        AutoDiscardState.mutable.value = AutoDiscardStatus(true, "AI 自动操作已开启")
+        modeChanged(true)
+        AutoDiscardState.mutable.value = AutoDiscardStatus(true, "无人值守模式已开启 · 等待完整牌局同步")
         log("ENABLED")
-        offer(state)
+        if (state?.optString("status") == "live" && !state.optBoolean("modelFallback")) offer(state)
     }
 
     @Synchronized fun observe(result: JSONObject) {
         latest = JSONObject(result.toString())
         if (!enabled) return
         if (result.optString("status") != "live" || result.optBoolean("modelFallback")) {
-            pause("同步或模型状态异常，自动操作已暂停"); return
+            suspend("等待牌局同步或模型恢复 · 无人值守模式保持开启"); return
         }
         result.optJSONObject("input")?.let { input ->
             val payload = input.optJSONObject("payload")
             val command = pending
-            if (command == null || payload == null || !matchesInput(command, input.optString("method"), payload)) {
-                pause("检测到手动或不匹配的操作，自动操作已暂停")
+            if (payload != null && (payload.optBoolean("auto_operation") || payload.optLong("timeuse") >= 1_000_000)) {
+                suspend("游戏已自动处理超时窗口，等待下一次同步")
+            } else if (command == null || payload == null || !matchesInput(command, input.optString("method"), payload)) {
+                pause("检测到手动操作，无人值守模式已关闭")
             } else {
                 wireConfirmed = true
                 log("UPLINK_CONFIRMED id=${command.optString("id")}")
@@ -76,14 +92,16 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
                     result.optLong("step") != command.optLong("step") ||
                     result.optString("connection") != command.optString("connection") ||
                     result.optLong("sourceGeneration") != command.optLong("sourceGeneration")) {
-                    pause("等待期间牌局已变化，自动操作已暂停")
+                    suspend("等待期间牌局已变化，等待最新同步")
+                    latest = JSONObject(result.toString())
+                    offer(result)
                     return
                 }
                 // Only parsed frames with unchanged decision/step renew proof.
                 command.put("sourceSequence", result.optLong("sourceSequence"))
             }
             if (now() - pendingAt > 12_000) {
-                pause("操作确认超时，已暂停；请手动检查")
+                suspend("操作确认超时，等待游戏重新同步")
             } else if (wireConfirmed && accepted && result.optLong("revision") != command.optLong("revision")) {
                 pending = null
                 offer(result)
@@ -98,14 +116,13 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
         val first = result.optJSONArray("recommendations")?.optJSONObject(0) ?: return
         // No server prompt (for example after restoration): wait for the next synchronized action.
         if (result.optJSONArray("legalOperations")?.length() == 0) return
+        val key = "${result.optLong("sourceGeneration")}:${result.optString("connection")}:${result.optLong("revision")}"
+        if (key == attempted || result.optLong("sourceSequence") <= 0) return
+        attempted = key
         val action = prepareAction(result, first) ?: run {
-            pause("AI 动作与合法操作未能匹配，请手动检查")
+            suspend("AI 动作与合法操作未能匹配，等待新的操作窗口")
             return
         }
-        val key = "${result.optLong("sourceGeneration")}:${result.optString("connection")}:${result.optLong("revision")}" 
-        if (key == attempted) return
-        if (result.optLong("sourceSequence") <= 0) return
-        attempted = key
         wireConfirmed = false; submitted = false; accepted = false
         pendingAt = now()
         val delay = delayMs()
@@ -118,7 +135,7 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
             put("gameTile", action.optString("tile")); put("tsumogiri", action.optBoolean("moqie"))
         }
         log("QUEUED kind=${action.optString("kind")} delayMs=$delay id=${pending!!.optString("id")}")
-        AutoDiscardState.mutable.value = AutoDiscardStatus(true, "随机等待 ${"%.1f".format(delay / 1000.0)} 秒 · 可随时暂停")
+        AutoDiscardState.mutable.value = AutoDiscardStatus(true, "随机等待 ${"%.1f".format(delay / 1000.0)} 秒 · 可随时关闭")
     }
 
     @Synchronized fun poll(acknowledgements: String?): String? {
@@ -126,12 +143,18 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
             val rows = org.json.JSONArray(acknowledgements)
             for (index in 0 until rows.length()) {
                 val ack = rows.getJSONObject(index)
+                when (ack.optString("state")) {
+                    "external" -> { if (enabled) suspend("游戏自动操作已完成，等待下一次同步"); continue }
+                    "continued" -> { log("ROUND_CONTINUED"); continue }
+                    "resync" -> { log("RESYNC_REQUESTED"); continue }
+                }
                 if (ack.optString("state") == "manual") {
-                    if (enabled) pause("检测到手动操作，自动操作已暂停")
+                    if (enabled) pause("检测到手动操作，无人值守模式已关闭")
                     continue
                 }
                 if (ack.optString("id") != pending?.optString("id")) continue
                 when (ack.optString("state")) {
+                    "waiting" -> { log("GAME_WAITING ${ack.optString("reason")}") }
                     "submitted" -> { submitted = true; log("GAME_SUBMITTED id=${ack.optString("id")}") }
                     "accepted" -> { accepted = true; log("SERVER_ACCEPTED id=${ack.optString("id")}") }
                     else -> {
@@ -148,16 +171,16 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
                             "failed" -> "服务器未确认操作"
                             else -> "游戏操作状态异常"
                         }
-                        pause("$reason，自动操作已暂停")
+                        suspend("$reason，等待新的完整牌局状态")
                     }
                 }
             }
-        }.onFailure { pause("操作反馈格式异常，已暂停") }
+        }.onFailure { suspend("操作反馈格式异常，等待重新同步") }
         if (enabled && wireConfirmed && accepted && latest?.optLong("revision") != pending?.optLong("revision")) {
             pending = null
             latest?.let(::offer)
         }
-        if (pending != null && now() - pendingAt > 12_000) pause("操作确认超时，已暂停；请手动检查")
+        if (pending != null && now() - pendingAt > 12_000) suspend("操作确认超时，等待游戏重新同步")
         return if (enabled && !submitted && !wireConfirmed && now() >= notBefore) pending?.toString() else null
     }
 

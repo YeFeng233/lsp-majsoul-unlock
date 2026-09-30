@@ -80,15 +80,25 @@ impl Assistant {
             } else { None });
         }
         let method = &parsed.parsed.as_ref().unwrap().method;
-        if direction == 0 && matches!(method.as_str(), ".lq.ActionPrototype" | ".lq.FastTest.syncGame")
+        if direction == 0 && matches!(method.as_str(), ".lq.ActionPrototype" | ".lq.FastTest.syncGame" | ".lq.FastTest.enterGame")
             && (self.active == Some(connection) || parsed.events.iter().any(|e| matches!(e, MjaiEvent::StartGame { .. }))) {
-            if let Some(step) = parsed.parsed.as_ref().unwrap().args.pointer("/payload/step").and_then(Value::as_u64) {
+            let payload = &parsed.parsed.as_ref().unwrap().args["payload"];
+            let last_restore = payload.pointer("/game_restore/actions").and_then(Value::as_array)
+                .and_then(|actions| actions.last());
+            // DesktopMgr.SyncGameByStep uses the final restored action's step.
+            // The RPC envelope may carry a different/default step.
+            if let Some(step) = last_restore.and_then(|action| action.get("step")).and_then(Value::as_u64)
+                .or_else(|| payload.get("step").and_then(Value::as_u64)) {
                 self.step = step;
             }
-            self.operations = parsed.parsed.as_ref().unwrap().args
-                .pointer("/payload/data/operation/operation_list").cloned().unwrap_or_else(|| json!([]));
-            self.operation_seat = parsed.parsed.as_ref().unwrap().args
-                .pointer("/payload/data/operation").map(|op| op["seat"].as_u64().unwrap_or(0));
+            let restored = last_restore.and_then(|action| {
+                    akagi_mobile_core::bridge::majsoul::parser::decode_restore_action(
+                        action["name"].as_str()?, action["data"].as_str()?).ok()
+                });
+            let operation = payload.pointer("/data/operation")
+                .or_else(|| restored.as_ref().and_then(|data| data.get("operation")));
+            self.operations = operation.and_then(|op| op.get("operation_list")).cloned().unwrap_or_else(|| json!([]));
+            self.operation_seat = operation.map(|op| op["seat"].as_u64().unwrap_or(0));
         }
         if self.active == Some(connection) && direction == 1 &&
             matches!(method.as_str(), ".lq.FastTest.inputOperation" | ".lq.FastTest.inputChiPengGang") {
@@ -436,6 +446,20 @@ mod tests {
         assert_eq!(result["hand"], expected["hand"]);
         assert_eq!(result["recommendations"], expected["recommendations"]);
         assert_eq!(result["analysis"]["shanten"], expected["analysis"]["shanten"]);
+        assert_eq!(result["legalOperations"], expected["legalOperations"]);
+        assert_eq!(result["step"], expected["step"]);
+    }
+
+    #[test]
+    fn enter_game_restore_preserves_step_and_server_prompt() {
+        let mut host = Assistant::new();
+        authenticate(&mut host, 4);
+        let state = rpc(&mut host, ".lq.FastTest.enterGame", json!({}), json!({
+            "step":0,"game_restore":{"actions":[{"step":9,"name":"ActionNewRound",
+                "data":STANDARD.encode(round_bytes(4))}]}
+        })).unwrap();
+        assert_eq!(state["step"], 9);
+        assert_eq!(state["legalOperations"][0]["type"], 1);
     }
 
     #[test]

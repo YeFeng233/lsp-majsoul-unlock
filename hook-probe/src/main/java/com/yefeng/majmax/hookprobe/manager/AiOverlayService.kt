@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -43,10 +44,12 @@ class AiOverlayService : Service() {
         private const val LIVE = "local-ai.LIVE"
         private const val DEMO = "local-ai.DEMO"
         private const val STOP = "local-ai.STOP"
+        private const val MODE_PREFS = "unattended"
+        private const val MODE_ENABLED = "enabled"
         private val ENDPOINT_URI = Uri.parse("content://com.yefeng.majmax.hookprobe.ai/capture")
         @Volatile private var advertisedEndpoint: CaptureEndpoint? = null
         @Volatile private var instance: AiOverlayService? = null
-        internal fun autoPoll(acks: String?): String? = instance?.auto?.poll(acks)
+        internal fun autoPoll(acks: String?): String? = instance?.pollAuto(acks)
         fun toggleAuto() { instance?.auto?.toggle() }
 
         internal fun currentEndpoint(): CaptureEndpoint? = advertisedEndpoint?.let {
@@ -57,17 +60,25 @@ class AiOverlayService : Service() {
             ContextCompat.startForegroundService(context,
                 Intent(context, AiOverlayService::class.java).setAction(if (demo) DEMO else LIVE))
         }
-        fun stop(context: Context) { context.stopService(Intent(context, AiOverlayService::class.java)) }
+        fun stop(context: Context) {
+            context.getSharedPreferences(MODE_PREFS, MODE_PRIVATE).edit().putBoolean(MODE_ENABLED, false).commit()
+            instance?.auto?.pause("助手已停止，无人值守模式已关闭")
+            context.stopService(Intent(context, AiOverlayService::class.java))
+        }
     }
 
     private data class Packet(val epoch: Long, val revision: Long, val connection: Long = 0,
         val kind: Int, val bytes: ByteArray = byteArrayOf(), val message: String = "",
         val source: Long = 0, val sequence: Long = 0)
-    private val auto = AutoDiscardController(log = { message ->
+    private val auto by lazy { AutoDiscardController(log = { message ->
         val parts = message.split(' ', limit = 2)
         DiagnosticsStore.appendAssistant(this, "INFO", "assistant.autoplay", parts[0].removeSuffix(":"),
             JSONObject().put("reason", parts.getOrNull(1) ?: ""))
-    })
+    }, initialEnabled = getSharedPreferences(MODE_PREFS, MODE_PRIVATE).getBoolean(MODE_ENABLED, false),
+        modeChanged = { enabled ->
+            getSharedPreferences(MODE_PREFS, MODE_PRIVATE).edit().putBoolean(MODE_ENABLED, enabled).commit()
+        }) }
+    private val recovery = UnattendedRecovery()
     private val alive = AtomicBoolean(true)
     private val demoMode = AtomicBoolean(false)
     private val epoch = AtomicLong(0)
@@ -85,6 +96,15 @@ class AiOverlayService : Service() {
         override fun run() {
             if (!alive.get()) return
             overlay?.updateAuto(AutoDiscardState.mutable.value)
+            if (recovery.shouldLaunch(auto.isEnabled() && !demoMode.get(), connected, SystemClock.elapsedRealtime())) {
+                runCatching {
+                    val launch = checkNotNull(packageManager.getLaunchIntentForPackage(GAME))
+                    startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                    DiagnosticsStore.appendAssistant(this@AiOverlayService, "INFO", "assistant.autoplay", "GAME_RELAUNCHED")
+                }.onFailure {
+                    DiagnosticsStore.appendAssistant(this@AiOverlayService, "WARN", "assistant.autoplay", "GAME_RELAUNCH_FAILED")
+                }
+            }
             main.postDelayed(this, 200)
         }
     }
@@ -92,7 +112,7 @@ class AiOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        auto.pause("自动操作默认关闭；同步牌局后可手动开启")
+        auto.isEnabled() // Restore persisted opt-in only after the Service context is attached.
         OnnxModelStore.initialize(this)
         DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "SERVICE_STARTED")
         val notifications = getSystemService(NotificationManager::class.java)
@@ -111,15 +131,16 @@ class AiOverlayService : Service() {
             stopSelf()
             return
         }
-        overlay = AiFloatingWindow(this, { stopSelf() }, { auto.toggle() }).also { it.show() }
+        overlay = AiFloatingWindow(this, { stop(this) }, { auto.toggle() }).also { it.show() }
         main.post(autoUiTick)
         worker = Thread({ consume() }, "majmax-ai-engine").also { it.start() }
         reader = Thread({ listen() }, "majmax-ai-reader").also { it.start() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == STOP) { stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == STOP) { stop(this); return START_NOT_STICKY }
         demoMode.set(intent?.action == DEMO)
+        if (demoMode.get()) auto.pause("模型自检中，无人值守模式已关闭")
         runCatching {
             grantUriPermission(GAME, ENDPOINT_URI, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             DiagnosticsAccess.grantToGame(this)
@@ -131,11 +152,18 @@ class AiOverlayService : Service() {
             queue.offer(Packet(epoch.get(), revision.incrementAndGet(), kind = 5))
         }
         runCatching { client?.close() }
-        return START_NOT_STICKY
+        return START_STICKY
+    }
+
+    private fun pollAuto(acks: String?): String {
+        val command = auto.poll(acks)
+        return if (command != null && !demoMode.get()) JSONObject(command).put("unattended", true).toString()
+        else JSONObject().put("control", "mode").put("enabled", auto.isEnabled() && !demoMode.get())
+            .put("resync", auto.needsSync()).put("nonce", SystemClock.elapsedRealtime()).toString()
     }
 
     private fun reset(message: String) {
-        auto.invalidate("连接或同步已变化，自动操作已暂停")
+        auto.invalidate("连接或同步已变化，等待恢复 · 无人值守模式保持原开关状态")
         val generation = epoch.incrementAndGet()
         queue.clear()
         val ticket = revision.incrementAndGet()
@@ -167,7 +195,7 @@ class AiOverlayService : Service() {
                     client = socket
                     connected = true
                     DiagnosticsStore.appendAssistant(this, "INFO", "assistant.service", "GAME_HOOK_CONNECTED")
-                    if (!demoMode.get()) reset("Hook 已连接，等待进入牌局；中途开启请重新进入")
+                    if (!demoMode.get()) reset("Hook 已连接，等待进入牌局或恢复完整牌局同步")
                     socket.soTimeout = 8_000
                     var sourceGeneration: Long? = null
                     while (alive.get()) {
@@ -182,14 +210,14 @@ class AiOverlayService : Service() {
                         input.readFully(data)
                         if (demoMode.get()) continue
                         if (sourceGeneration != null && sourceGeneration != source) {
-                            reset("检测到消息丢失，请重新进入牌局同步")
+                            reset("检测到消息丢失，等待恢复完整牌局同步")
                         }
                         sourceGeneration = source
                         if (kind == 4) continue
                         val packet = Packet(epoch.get(), revision.incrementAndGet(), connection, kind, data,
                             source = source, sequence = sequence)
                         if (!queue.offer(packet)) {
-                            reset("分析未跟上牌局，请重新进入牌局同步")
+                            reset("分析未跟上牌局，等待恢复完整牌局同步")
                             break
                         }
                     }
@@ -250,7 +278,7 @@ class AiOverlayService : Service() {
         } catch (_: InterruptedException) {
             // Normal service shutdown.
         } catch (_: Throwable) {
-            auto.invalidate("本地引擎异常，自动操作已暂停")
+            auto.invalidate("本地引擎异常，等待恢复")
             val failed = JSONObject().put("status", "error").put("message", "本地引擎加载失败，请停止助手并重启管理应用")
             post(failed, epoch.get(), revision.get())
         }
@@ -271,7 +299,7 @@ class AiOverlayService : Service() {
 
     override fun onDestroy() {
         alive.set(false)
-        auto.invalidate("助手已停止，自动操作已暂停")
+        auto.invalidate("助手服务中断，等待恢复")
         instance = null
         epoch.incrementAndGet()
         advertisedEndpoint = null

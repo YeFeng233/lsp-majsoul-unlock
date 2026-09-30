@@ -34,13 +34,14 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 check(command.getString("gameTile") == "0m")
                 check(!command.getBoolean("tsumogiri"))
             }
-            test("demo and disconnected sessions cannot enable") { gate, _ ->
+            test("arming before sync never sends an input") { gate, _ ->
                 gate.observe(live().put("status","demo")); gate.toggle(); check(gate.poll(null) == null)
                 gate.observe(live()); gate.invalidate("disconnected"); gate.toggle(); check(gate.poll(null) == null)
             }
             test("new capture session invalidates queued input") { gate, _ ->
                 gate.observe(live()); gate.toggle(); check(gate.poll(null) != null)
-                gate.invalidate("new session"); check(gate.poll(null) == null && !AutoDiscardState.mutable.value.enabled)
+                gate.invalidate("new session"); check(gate.poll(null) == null && AutoDiscardState.mutable.value.enabled)
+                gate.observe(live().put("sourceGeneration",4)); check(gate.poll(null) != null)
             }
             test("manual operation pauses") { gate, _ ->
                 gate.observe(live()); gate.toggle()
@@ -52,20 +53,25 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 gate.poll(ack("", "manual"))
                 check(previous == AutoDiscardState.mutable.value && gate.poll(null) == null)
             }
-            test("model failure pauses") { gate, _ ->
+            test("model failure waits while armed") { gate, _ ->
                 gate.observe(live()); gate.toggle(); gate.observe(live().put("modelFallback",true))
-                check(gate.poll(null) == null && !AutoDiscardState.mutable.value.enabled)
+                check(gate.poll(null) == null && AutoDiscardState.mutable.value.enabled)
+                gate.observe(live(2)); check(gate.poll(null) != null)
             }
             test("riichi requires a server declaration prompt") { gate, _ ->
                 gate.observe(live(kind="riichi")); gate.toggle(); check(gate.poll(null) == null)
             }
-            test("timeout pauses without retry") { gate, advance ->
+            test("timeout keeps opt-in without replaying old decision") { gate, advance ->
                 gate.observe(live()); gate.toggle(); advance()
-                check(gate.poll(null) == null && !AutoDiscardState.mutable.value.enabled)
+                check(gate.poll(null) == null && AutoDiscardState.mutable.value.enabled)
+                gate.observe(live()); check(gate.poll(null) == null)
+                gate.observe(live(2)); check(gate.poll(null) != null)
             }
             test("stale rejection does not replay decision") { gate, _ ->
                 gate.observe(live()); gate.toggle(); val id=JSONObject(gate.poll(null)!!).getString("id")
-                gate.poll(ack(id,"stale")); gate.toggle(); check(gate.poll(null) == null)
+                gate.poll(ack(id,"stale")); check(gate.isEnabled() && gate.poll(null) == null)
+                gate.observe(live()); check(gate.poll(null) == null)
+                gate.observe(live(2)); check(gate.poll(null) != null)
             }
             test("sent input requires server acceptance before next decision") { gate, _ ->
                 gate.observe(live()); gate.toggle(); val id=JSONObject(gate.poll(null)!!).getString("id")
@@ -172,11 +178,12 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 time=1_500; gate.observe(live().put("sourceSequence",9)); check(gate.poll(null)==null)
                 time=2_000; check(JSONObject(checkNotNull(gate.poll(null))).getLong("sourceSequence")==9L)
             }
-            test("changed decision during delay pauses") { _, _ ->
+            test("changed decision gets its own full delay") { _, _ ->
                 var time=0L
                 val gate=AutoDiscardController({}, {time}, {2_000L})
                 gate.observe(live()); gate.toggle(); gate.observe(live(2))
-                time=2_000; check(gate.poll(null)==null && !AutoDiscardState.mutable.value.enabled)
+                time=1_999; check(gate.poll(null)==null && AutoDiscardState.mutable.value.enabled)
+                time=2_000; check(JSONObject(checkNotNull(gate.poll(null))).getInt("revision")==2)
             }
             test("pause during delay never publishes input") { _, _ ->
                 var time=0L
@@ -192,6 +199,44 @@ class AutoDiscardInstrumentation : Instrumentation() {
                     time=5_000
                     check(JSONObject(checkNotNull(gate.poll(null))).getLong("delayMs") in 2_000L..5_000L)
                 }
+            }
+            test("round settlement resumes automatically with a new round") { gate, _ ->
+                gate.observe(live()); gate.toggle()
+                gate.observe(JSONObject().put("status","waiting"))
+                check(gate.isEnabled() && gate.poll(null)==null)
+                gate.observe(live(2)); check(gate.poll(null)!=null)
+            }
+            test("external timeout does not disable unattended mode") { gate, _ ->
+                gate.observe(live()); gate.toggle(); gate.poll(ack("","external"))
+                check(gate.isEnabled() && gate.poll(null)==null)
+                gate.observe(live(2)); check(gate.poll(null)!=null)
+            }
+            test("restored opt-in waits for sync and persists explicit closure") { _, _ ->
+                val saved=mutableListOf<Boolean>()
+                val gate=AutoDiscardController({}, {0L}, {0L}, initialEnabled=true, modeChanged={saved.add(it)})
+                check(gate.isEnabled() && gate.needsSync() && gate.poll(null)==null)
+                gate.observe(live()); check(gate.poll(null)!=null)
+                gate.pause("explicit stop"); gate.observe(live(2))
+                check(!gate.isEnabled() && gate.poll(null)==null && saved.last()==false)
+            }
+            test("game relaunch waits ten seconds and backs off") { _, _ ->
+                val recovery=UnattendedRecovery()
+                check(!recovery.shouldLaunch(true,false,0))
+                check(!recovery.shouldLaunch(true,false,9_999))
+                check(recovery.shouldLaunch(true,false,10_000))
+                check(!recovery.shouldLaunch(true,false,39_999))
+                check(recovery.shouldLaunch(true,false,40_000))
+                check(!recovery.shouldLaunch(true,false,99_999))
+                check(recovery.shouldLaunch(true,false,100_000))
+                check(!recovery.shouldLaunch(true,true,101_000))
+                check(!recovery.shouldLaunch(true,false,102_000))
+                check(!recovery.shouldLaunch(false,false,120_000))
+            }
+            test("temporary game proof wait keeps the same pending command") { gate, _ ->
+                gate.observe(live()); gate.toggle()
+                val cmd=JSONObject(checkNotNull(gate.poll(null)))
+                gate.poll(ack(cmd.getString("id"),"waiting"))
+                check(gate.isEnabled() && JSONObject(checkNotNull(gate.poll(null))).getString("id")==cmd.getString("id"))
             }
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)

@@ -29,7 +29,7 @@ public final class ProbeModule extends XposedModule {
     private static final String TAG = "MajsoulProbe";
     private static final Uri AI_ENDPOINT_URI = Uri.parse(
             "content://com.yefeng.majmax.hookprobe.ai/capture");
-    private static final String ASSET_VERSION = "0.8.1-autoplay1";
+    private static final String ASSET_VERSION = "0.9.0-unattended2";
     private static final String[] VERSIONED_ASSETS = {
             "max_data.yaml", "ui/MajsoulMaxSettings.lua", "ui/MajsoulMaxAutoDiscard.lua"
     };
@@ -148,14 +148,20 @@ public final class ProbeModule extends XposedModule {
                     aiEndpointToken = new byte[0];
                 }
                 if (aiEndpointPort != 0) {
-                    Bundle report = new Bundle();
-                    report.putString("acks", nativeAutoResults());
-                    Bundle reply = gameContext.getContentResolver().call(AI_ENDPOINT_URI, "autoPoll", null, report);
-                    String command = reply == null ? null : reply.getString("command");
-                    JSONObject json = command == null ? null : new JSONObject(command);
-                    nativeAutoCommand(command, json == null ? 0 : json.getLong("sourceGeneration"),
-                            json == null ? 0 : Long.parseLong(json.getString("connection")),
-                            json == null ? 0 : json.getLong("sourceSequence"));
+                    try {
+                        Bundle report = new Bundle();
+                        report.putString("acks", nativeAutoResults());
+                        Bundle reply = gameContext.getContentResolver().call(AI_ENDPOINT_URI, "autoPoll", null, report);
+                        String command = reply == null ? null : reply.getString("command");
+                        JSONObject json = command == null ? null : new JSONObject(command);
+                        nativeAutoCommand(command, json == null ? 0 : json.optLong("sourceGeneration"),
+                                json == null ? 0 : Long.parseLong(json.optString("connection", "0")),
+                                json == null ? 0 : json.optLong("sourceSequence"));
+                    } catch (Throwable ignored) {
+                        // Command polling is independent of passive capture. A bad
+                        // command must never tear down the healthy game connection.
+                        nativeAutoCommand(null, 0, 0, 0);
+                    }
                 } else {
                     nativeAutoCommand(null, 0, 0, 0);
                 }

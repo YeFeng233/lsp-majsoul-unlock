@@ -3,6 +3,8 @@ local asset = 'hook-probe/src/main/assets/liqi_config/ui/MajsoulMaxAutoDiscard.l
 local count = 0
 local function fixture()
     __majmax_auto = nil
+    UnityEngine={Time={realtimeSinceStartup=0}}
+    UI_Win=nil; UI_HuleShow=nil; UI_ScoreChange=nil; UI_ConfirmNewRound=nil; UI_HangUpWarn=nil
     local state = { sent = {}, acks = {}, current = true }
     local function view(name)
         return { valid=true, is_open=false, pai={ToString=function() return name end}, transform={} }
@@ -16,7 +18,7 @@ local function fixture()
     cjson = {encode=function(value) state.acks[#state.acks+1]=value; return 'ack' end,
         decode=function() return state.command end}
     package.loaded.cjson = cjson
-    __majmax_auto_command = function() return 'command' end
+    __majmax_auto_command = function() return state.leaseExpired and '' or 'command' end
     __majmax_auto_current = function() return state.current and 'yes' or 'no' end
     __majmax_auto_ack = function() end
     GameUtility = {EMJ_Mode={play=1},E_PlayerOperation={dapai=1,eat=2,peng=3,an_gang=4,ming_gang=5,add_gang=6,liqi=7,zimo=8,rong=9,jiuzhongjiupai=10,babei=11}}
@@ -88,7 +90,8 @@ test('incorrect tsumogiri never substitutes another copy',function(s)
     s.command.tsumogiri=true; __majmax_auto_tick(); assert(#s.sent==0 and s.acks[1].state=='illegal_tile')
 end)
 test('revoked or newer capture never executes',function(s)
-    s.current=false; __majmax_auto_tick(); assert(#s.sent==0 and s.acks[1].state=='stale')
+    s.current=false; __majmax_auto_tick(); assert(#s.sent==0 and s.acks[1].state=='waiting')
+    s.current=true; __majmax_auto_tick(); assert(#s.sent==1)
 end)
 test('hand mismatch fails closed',function(s)
     s.command.hand={'5m','5m','9p'}; __majmax_auto_tick(); assert(#s.sent==0 and s.acks[1].state=='hand_mismatch')
@@ -181,5 +184,76 @@ end)
 test('hidden action window waits instead of firing',function(s)
     operation(s,'hora',9); UI_ChiPengHu.Inst.transform.gameObject.activeInHierarchy=false
     __majmax_auto_tick(); assert(#s.sent==0)
+end)
+local function resultWindow(s, className, method)
+    local ui={transform={gameObject={activeInHierarchy=true}},btn_confirm={gameObject={activeInHierarchy=true},interactable=true}}
+    ui[method]=function(self) s.continued=(s.continued or 0)+1 end
+    _G[className]={Inst=ui, OnShow=function() end}
+    s.command={control='mode',enabled=true,resync=false}
+    DesktopMgr.Inst.gameing=false
+    return ui
+end
+test('win result confirms only after two to five seconds and only once',function(s)
+    resultWindow(s,'UI_Win','_onConfirm')
+    __majmax_auto_tick(); assert(not s.continued)
+    local due=__majmax_auto.continuation.due; assert(due>=2 and due<=5)
+    UnityEngine.Time.realtimeSinceStartup=due-0.001; __majmax_auto_tick(); assert(not s.continued)
+    UnityEngine.Time.realtimeSinceStartup=due; __majmax_auto_tick(); __majmax_auto_tick(); assert(s.continued==1)
+end)
+test('all round result dialogs use their existing confirm methods',function(s)
+    for _,name in ipairs({'UI_HuleShow','UI_ScoreChange','UI_ConfirmNewRound'}) do
+        resultWindow(s,name,'Btn_Confirm'); __majmax_auto_tick()
+        UnityEngine.Time.realtimeSinceStartup=__majmax_auto.continuation.due; __majmax_auto_tick()
+        _G[name]=nil
+    end
+    assert(s.continued==3 and #s.sent==0)
+end)
+test('hidden or animating result controls cannot continue',function(s)
+    local ui=resultWindow(s,'UI_Win','_onConfirm'); ui.isDoAnimation=true
+    __majmax_auto_tick(); assert(not __majmax_auto.continuation)
+    ui.isDoAnimation=false; ui.btn_confirm.gameObject.activeInHierarchy=false
+    __majmax_auto_tick(); assert(not __majmax_auto.continuation)
+end)
+test('disabling mode or losing provider lease cancels continuation',function(s)
+    resultWindow(s,'UI_Win','_onConfirm'); __majmax_auto_tick()
+    s.command.enabled=false; UnityEngine.Time.realtimeSinceStartup=10; __majmax_auto_tick(); assert(not s.continued)
+    s.command.enabled=true; __majmax_auto_tick(); s.leaseExpired=true
+    UnityEngine.Time.realtimeSinceStartup=20; __majmax_auto_tick(); assert(not s.continued and not __majmax_auto.armed)
+end)
+test('a new result page receives a fresh delay',function(s)
+    local ui=resultWindow(s,'UI_Win','_onConfirm'); ui.current_index=1
+    __majmax_auto_tick(); UnityEngine.Time.realtimeSinceStartup=5; __majmax_auto_tick(); assert(s.continued==1)
+    ui.current_index=2; __majmax_auto_tick(); assert(s.continued==1)
+    UnityEngine.Time.realtimeSinceStartup=__majmax_auto.continuation.due; __majmax_auto_tick(); assert(s.continued==2)
+end)
+test('resync uses auth and forces a complete restore with cooldown',function(s)
+    s.command={control='mode',enabled=true,resync=true}
+    MJNetMgr.Inst._connectSuccess=function(self)
+        s.resynced=(s.resynced or 0)+1
+        self:SendRequest('FastTest','syncGame',{round_id='E1',step=3},function() end)
+    end
+    __majmax_auto_tick(); assert(not s.resynced)
+    UnityEngine.Time.realtimeSinceStartup=__majmax_auto.resyncDue; __majmax_auto_tick()
+    assert(s.resynced==1 and s.sent[1].round_id=='-1' and s.sent[1].step==1000000)
+    UnityEngine.Time.realtimeSinceStartup=10; __majmax_auto_tick(); assert(s.resynced==1)
+    MJNetMgr.Inst:SendRequest('FastTest','syncGame',{round_id='E2',step=7},function() end)
+    assert(s.sent[2].round_id=='E2' and s.sent[2].step==7)
+end)
+test('between rounds and during reconnect never trigger extra resync',function(s)
+    s.command={control='mode',enabled=true,resync=true}; DesktopMgr.Inst.gameing=false
+    __majmax_auto_tick(); assert(not __majmax_auto.resyncDue)
+    DesktopMgr.Inst.gameing=true; DesktopMgr.Inst.duringReconnect=true
+    __majmax_auto_tick(); assert(not __majmax_auto.resyncDue)
+end)
+test('built in timeout is external rather than manual input',function(s)
+    s.command={control='mode',enabled=true}; __majmax_auto_tick()
+    MJNetMgr.Inst:SendRequest('FastTest','inputOperation',{auto_operation=true},function() end)
+    assert(s.acks[#s.acks].state=='external')
+end)
+test('restored game step waits for proof without disabling or replaying',function(s)
+    s.command.step=9; DesktopMgr.Inst.current_step=8; __majmax_auto_tick()
+    assert(#s.sent==0 and s.acks[1].state=='waiting')
+    __majmax_auto_tick(); assert(#s.acks==1)
+    DesktopMgr.Inst.current_step=9; __majmax_auto_tick(); assert(#s.sent==1)
 end)
 print(string.format('%d automatic operation checks passed',count))

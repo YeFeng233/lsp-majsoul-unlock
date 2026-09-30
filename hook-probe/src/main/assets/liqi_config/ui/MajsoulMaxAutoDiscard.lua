@@ -11,6 +11,12 @@ local function mark(id)
     A.order[#A.order + 1] = id
     if #A.order > 64 then A.seen[table.remove(A.order, 1)] = nil end
 end
+local function waiting(id, reason)
+    if A.waitId ~= id or A.waitReason ~= reason then
+        A.waitId = id; A.waitReason = reason
+        ack(id, 'waiting', reason)
+    end
+end
 local function tile(value)
     local honors = { E='1z', S='2z', W='3z', N='4z', P='5z', F='6z', C='7z' }
     if honors[value] then return honors[value] end
@@ -25,11 +31,17 @@ local function install()
         A.networkHooked = true
         local original = MJNetMgr.SendRequest
         function MJNetMgr:SendRequest(service, method, request, callback, ...)
+            if service == 'FastTest' and method == 'syncGame' and A.resyncing then
+                -- Rebuild the assistant from auth + the complete round, not a partial delta.
+                request.round_id = '-1'; request.step = 1000000
+                A.resyncing = nil
+            end
             if service ~= 'FastTest' or (method ~= 'inputOperation' and method ~= 'inputChiPengGang') then
                 return original(self, service, method, request, callback, ...)
             end
             local id = A.executing
-            ack(id, id and 'submitted' or 'manual')
+            local external = request and (request.auto_operation or (tonumber(request.timeuse) or 0) >= 1000000)
+            ack(id, id and 'submitted' or (external and 'external' or 'manual'))
             local wrapped = function(error, response, ...)
                 if id then
                     local code = response and response.error and response.error.code
@@ -42,18 +54,92 @@ local function install()
     end
     return true
 end
+local function active(object)
+    if not object then return false end
+    local gameObject = object.gameObject or (object.transform and object.transform.gameObject)
+    return gameObject and gameObject.activeInHierarchy
+end
+local function seconds()
+    return UnityEngine and UnityEngine.Time and UnityEngine.Time.realtimeSinceStartup
+end
+local function continuation(command)
+    local t = seconds()
+    local d = DesktopMgr and DesktopMgr.Inst
+    local net = MJNetMgr and MJNetMgr.Inst
+    local mode = d and d.game_config and d.game_config.mode and d.game_config.mode.mode
+    if not A.armed or not t or not d or not DesktopMgr.IsActive() or not GameUtility
+            or d.mode ~= GameUtility.EMJ_Mode.play or d.duringReconnect or d.time_stopped
+            or not net or not net:IsOK() or (mode ~= 1 and mode ~= 2 and mode ~= 11 and mode ~= 12) then
+        A.continuation = nil; A.resyncDue = nil; return
+    end
+    -- Only known game result/next-round controls; never starts a new match.
+    local candidates = {
+        {UI_Win, '_onConfirm'}, {UI_HuleShow, 'Btn_Confirm'},
+        {UI_ScoreChange, 'Btn_Confirm'}, {UI_ConfirmNewRound, 'Btn_Confirm'},
+        {UI_HangUpWarn, 'Btn_Confirm', true}
+    }
+    for _, item in ipairs(candidates) do
+        local class, method, root = item[1], item[2], item[3]
+        if class and type(class.OnShow) == 'function' and not class._majmaxShowHook then
+            class._majmaxShowHook = true
+            local original = class.OnShow
+            function class:OnShow(...)
+                self._majmaxShow = (self._majmaxShow or 0) + 1
+                return original(self, ...)
+            end
+        end
+        local ui = class and class.Inst
+        local owner = ui and (root and ui.root or ui)
+        local btn = owner and owner.btn_confirm
+        if ui and owner and active(ui) and active(btn) and btn.interactable ~= false
+                and not ui.locking and not owner.locking and not ui.isDoAnimation
+                and type(owner[method]) == 'function' then
+            local key = tostring(ui._majmaxShow or 0)..':'..tostring(ui.current_index or 0)
+                ..':'..tostring(ui.during_show_liujumanguan or false)
+            local pending = A.continuation
+            if not pending or pending.ui ~= ui or pending.key ~= key then
+                pending = {ui=ui, key=key, due=t + math.random(2000,5000)/1000}
+                A.continuation = pending
+            end
+            A.resyncDue = nil
+            if not pending.done and t >= pending.due then
+                pending.done = true
+                local ok = pcall(owner[method], owner)
+                ack('', ok and 'continued' or 'continuation_failed')
+            end
+            return
+        end
+    end
+    A.continuation = nil
+    if command.control == 'mode' and command.resync and d.gameing
+            and type(net._connectSuccess) == 'function' and t >= (A.nextResync or 0) then
+        A.resyncDue = A.resyncDue or (t + math.random(2000,5000)/1000)
+        if t >= A.resyncDue then
+            A.resyncDue = nil; A.nextResync = t + 30; A.resyncing = true
+            local ok = pcall(net._connectSuccess, net)
+            if not ok then A.resyncing = nil end
+            ack('', ok and 'resync' or 'resync_failed')
+        end
+    else A.resyncDue = nil end
+end
 local function execute(command)
     local id = command.id
     if type(id) ~= 'string' or #id > 100 or A.seen[id] then return end
-    if __majmax_auto_current() ~= 'yes' then mark(id); ack(id, 'stale'); return end
+    -- A newer heartbeat may be captured between provider polling and this tick.
+    -- Wait for renewed proof; the controller revokes changed decisions/timeouts.
+    if __majmax_auto_current() ~= 'yes' then waiting(id, 'capture_proof'); return end
     local d = DesktopMgr and DesktopMgr.Inst
     local r = d and d.mainrole
     local enums = GameUtility and GameUtility.EMJ_Mode
     local ops = GameUtility and GameUtility.E_PlayerOperation
     if not d or not r or not enums or not ops or not d.gameing or not DesktopMgr.IsActive()
-            or d.mode ~= enums.play or d.duringReconnect or d.time_stopped or not MJNetMgr.Inst:IsOK() then return end
+            or d.mode ~= enums.play or d.duringReconnect or d.time_stopped or not MJNetMgr.Inst:IsOK() then
+        waiting(id, 'game_window'); return
+    end
     -- The network snapshot arrives before the game's draw animation finishes.
-    if d.current_step ~= command.step then return end
+    if d.current_step ~= command.step then
+        waiting(id, 'game_step '..tostring(d.current_step)..' expected '..tostring(command.step)); return
+    end
     if r._mouse_downed or r._during_drag then mark(id); ack(id, 'manual'); return end
     if r._during_liqi or r._during_reveal or r._during_reveal_liqi then
         mark(id); ack(id, 'special_selection'); return
@@ -191,7 +277,7 @@ local function execute(command)
     end
     if not run then mark(id); ack(id, 'unknown_action'); return end
     -- Recheck after all game-side checks and immediately before committing.
-    if __majmax_auto_current() ~= 'yes' then mark(id); ack(id, 'stale'); return end
+    if __majmax_auto_current() ~= 'yes' then waiting(id, 'capture_proof'); return end
     mark(id)
     A.executing = id
     local ok = pcall(run)
@@ -202,9 +288,13 @@ function __majmax_auto_tick()
     local ok = pcall(function()
         if not install() or type(__majmax_auto_command) ~= 'function' then return end
         local text = __majmax_auto_command()
-        if text == '' then return end
+        if not text or text == '' then A.armed = false; A.continuation = nil; A.resyncDue = nil; return end
         local command = A.json.decode(text)
-        if type(command) == 'table' then execute(command) end
+        if type(command) == 'table' then
+            A.armed = (command.control == 'mode' and command.enabled == true) or command.unattended == true
+            continuation(command)
+            if command.control ~= 'mode' then execute(command) end
+        end
     end)
     if not ok then ack('', 'adapter_exception') end
 end

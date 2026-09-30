@@ -64,7 +64,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         if (auto == value) return
         auto = value
         title?.text = caption()
-        title?.contentDescription = if (collapsed && auto.enabled) "暂停自动操作，可拖动" else if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
+        title?.contentDescription = if (collapsed && auto.enabled) "关闭无人值守模式，可拖动" else if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
         if (!collapsed) renderBody()
     }
     private fun caption() = if (collapsed) (if (auto.enabled) "停" else "AI")
@@ -108,7 +108,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         title = caption
         caption.gravity = if (collapsed) Gravity.CENTER else Gravity.CENTER_VERTICAL
         caption.setPadding(dp(if (collapsed) 0 else 12), 0, 0, 0)
-        caption.contentDescription = if (collapsed && auto.enabled) "暂停自动操作，可拖动" else if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
+        caption.contentDescription = if (collapsed && auto.enabled) "关闭无人值守模式，可拖动" else if (collapsed) "展开 AI 悬浮窗，可拖动" else "拖动悬浮窗"
         heading.addView(caption, LinearLayout.LayoutParams(if (collapsed) dp(48) else 0, dp(48), if (collapsed) 0f else 1f))
         makeDraggable(caption) {
             if (collapsed && auto.enabled) toggleAuto()
@@ -147,7 +147,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         val content = body ?: return
         content.removeAllViews()
         content.addView(label(auto.message, 11f, if (auto.enabled) green else muted))
-        content.addView(action(if (auto.enabled) "暂停" else "开启", "自动操作开关", toggleAuto).apply {
+        content.addView(action(if (auto.enabled) "关闭无人值守模式" else "开启无人值守模式", "无人值守模式开关", toggleAuto).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44))
         })
         if (settings) {

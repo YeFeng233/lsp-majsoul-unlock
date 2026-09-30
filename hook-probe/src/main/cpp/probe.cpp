@@ -187,7 +187,7 @@ int luaLogMessage(void *state) {
 
 int luaAutoCommand(void *state) {
     std::lock_guard<std::mutex> lock(autoMutex);
-    pushLuaText(state, autoCommand);
+    pushLuaText(state, monotonicMs() - autoReceivedMs < 6000 ? autoCommand : "");
     return 1;
 }
 
