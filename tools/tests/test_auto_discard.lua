@@ -89,6 +89,41 @@ end)
 test('incorrect tsumogiri never substitutes another copy',function(s)
     s.command.tsumogiri=true; __majmax_auto_tick(); assert(#s.sent==0 and s.acks[1].state=='illegal_tile')
 end)
+
+local function openingDealer(s)
+    for i=1,11 do
+        local name='1m'
+        s.command.hand[#s.command.hand+1]=name
+        s.role._handpai[#s.role._handpai+1]={valid=true,is_open=false,pai={ToString=function() return name end}}
+    end
+    s.command.autoContext.openingDealerDiscard=true
+    s.command.autoContext.dealer=0; s.command.autoContext.phase='wait_act'
+    s.command.autoContext.melds={}; s.command.autoContext.riichi=false
+    s.command.action.clientOpeningDraw=true
+end
+
+test('opening dealer uses client draw identity after whole hand sorting',function(s)
+    openingDealer(s)
+    -- The virtual protocol draw is a red five; the game's sorted last tile is 9p.
+    s.command.tsumogiri=true; s.command.action.moqie=true
+    __majmax_auto_tick()
+    assert(#s.sent==1 and s.sent[1].tile=='0m' and not s.sent[1].moqie)
+end)
+
+test('opening dealer may discard the client last tile despite a virtual hand cut',function(s)
+    openingDealer(s)
+    s.command.gameTile='9p'; s.command.action.tile='9p'
+    __majmax_auto_tick()
+    assert(#s.sent==1 and s.sent[1].tile=='9p' and s.sent[1].moqie)
+end)
+
+test('opening exception requires protocol dealer and phase proof',function(s)
+    openingDealer(s)
+    s.command.tsumogiri=true; s.command.action.moqie=true
+    s.command.autoContext.dealer=1
+    __majmax_auto_tick()
+    assert(#s.sent==0 and s.acks[1].state=='illegal_tile')
+end)
 test('revoked or newer capture never executes',function(s)
     s.current=false; __majmax_auto_tick(); assert(#s.sent==0 and s.acks[1].state=='waiting')
     s.current=true; __majmax_auto_tick(); assert(#s.sent==1)

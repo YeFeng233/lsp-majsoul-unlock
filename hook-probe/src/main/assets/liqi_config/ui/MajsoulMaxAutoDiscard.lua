@@ -179,6 +179,13 @@ local function execute(command)
         return
     end
     if type(action) ~= 'table' then mark(id); ack(id, 'unknown_action'); return end
+    -- NewGame sorts the complete opening hand; only its first dealer discard
+    -- delegates moqie to the original client method. Never relax tile/hand proof.
+    local opening = context.openingDealerDiscard == true and action.clientOpeningDraw == true
+        and (action.kind == 'discard' or action.kind == 'riichi')
+        and context.dealer == command.seat and context.phase == 'wait_act'
+        and context.riichi ~= true and type(context.melds) == 'table' and #context.melds == 0
+        and type(command.hand) == 'table' and #command.hand == 14
     local kind, operation = action.kind, nil
     for _, op in ipairs(d.oplist or {}) do
         if op.type == action.type then operation = op end
@@ -207,7 +214,7 @@ local function execute(command)
         local name = view.pai:ToString()
         actual[#actual + 1] = name
         if name == command.gameTile and view.valid and not view.pai.baida and not view.is_open then
-            if command.tsumogiri == (view == r._last_tile) then selected = view end
+            if command.tsumogiri == (view == r._last_tile) or opening then selected = view end
         end
     end
     table.sort(actual); table.sort(expected)

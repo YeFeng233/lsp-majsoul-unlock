@@ -237,6 +237,7 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
                 if (kind == "riichi" && (context.optBoolean("riichi") || !(0 until combo.length()).any { combo.optString(it).replace('0','5') == tile.replace('0','5') })) return null
                 val moqie = if (kind == "riichi") first.optString("tile") == context.optString("drawnTile") else first.getBoolean("tsumogiri")
                 if (context.optBoolean("riichi") && !moqie) return null
+                if (isOpeningDealerDiscard(result)) out.put("clientOpeningDraw", true)
                 return out.put("tile", tile).put("moqie", moqie)
             }
             if (kind == "kita") {
@@ -277,6 +278,10 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
             if (payload.optBoolean("cancel_operation") || payload.optInt("type") != action.optInt("type")) return false
             for (key in listOf("tile","moqie","index")) {
                 if (key == "tile" && action.optString("kind") !in listOf("discard","riichi")) continue // Other RPCs identify the operation by type/index.
+                // Only the dealer's opening 14-tile hand uses the client's sorted
+                // last-tile identity. Exact target/red-tile/type checks still apply.
+                if (key == "moqie" && action.optBoolean("clientOpeningDraw") &&
+                    action.optString("kind") in listOf("discard","riichi") && isOpeningDealerDiscard(command)) continue
                 if (action.has(key)) {
                     if (key == "moqie" && payload.optBoolean(key) != action.optBoolean(key)) return false
                     if (key == "index" && payload.optInt(key) != action.optInt(key)) return false
@@ -284,6 +289,15 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
                 }
             }
             return true
+        }
+
+        private fun isOpeningDealerDiscard(result: JSONObject): Boolean {
+            val context = result.optJSONObject("autoContext") ?: return false
+            val seat = result.optInt("seat", -1)
+            return context.optBoolean("openingDealerDiscard") && context.optString("phase") == "wait_act" &&
+                seat in 0 until result.optInt("players", 0) && seat == context.optInt("dealer", -2) &&
+                result.optJSONArray("hand")?.length() == 14 && !context.optBoolean("riichi") &&
+                context.optJSONArray("melds")?.length() == 0
         }
 
         fun toGameTile(tile: String): String? {

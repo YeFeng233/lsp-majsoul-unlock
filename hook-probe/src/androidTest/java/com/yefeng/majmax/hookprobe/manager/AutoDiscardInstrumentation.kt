@@ -7,7 +7,11 @@ import org.json.JSONObject
 
 /** Runs against Android's real JSONObject, clock supplied explicitly; no game input. */
 class AutoDiscardInstrumentation : Instrumentation() {
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); start() }
+    private var controllerOnly = false
+    override fun onCreate(arguments: Bundle?) {
+        controllerOnly = arguments?.getString("controllerOnly") == "true"
+        super.onCreate(arguments); start()
+    }
     override fun onStart() {
         val output = Bundle()
         runCatching {
@@ -101,6 +105,25 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 return state
             }
             fun prepared(state: JSONObject) = checkNotNull(AutoDiscardController.prepareAction(state,state.getJSONArray("recommendations").getJSONObject(0)))
+            test("opening dealer accepts client moqie only with complete protocol proof") { gate, _ ->
+                val hand=listOf("1m","2m","3m","4m","5m","6m","7m","8m","9m","1p","2p","3p","1s","9s")
+                val state=actionCase("discard",1,"9s",hand=hand,response=false)
+                state.getJSONArray("recommendations").getJSONObject(0).put("tsumogiri",true)
+                state.getJSONObject("autoContext").put("openingDealerDiscard",true).put("dealer",0).put("melds",JSONArray())
+                gate.observe(state); gate.toggle()
+                val cmd=JSONObject(checkNotNull(gate.poll(null)))
+                check(cmd.getJSONObject("action").getBoolean("clientOpeningDraw"))
+                val payload=JSONObject("""{"type":1,"tile":"9s","moqie":false}""")
+                check(AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputOperation",payload))
+                check(!AutoDiscardController.matchesInput(cmd,".lq.FastTest.inputOperation",JSONObject(payload.toString()).put("tile","1s")))
+                for ((key,value) in listOf("openingDealerDiscard" to false,"dealer" to 1,"phase" to "wait_response","riichi" to true,"melds" to JSONArray().put(JSONObject()))) {
+                    val invalid=JSONObject(cmd.toString())
+                    invalid.getJSONObject("autoContext").put(key,value)
+                    check(!AutoDiscardController.matchesInput(invalid,".lq.FastTest.inputOperation",payload))
+                }
+                val shortHand=JSONObject(cmd.toString()).put("hand",JSONArray(hand.dropLast(1)))
+                check(!AutoDiscardController.matchesInput(shortHand,".lq.FastTest.inputOperation",payload))
+            }
             test("riichi retains red tile and declaration type") { gate, _ ->
                 val state=actionCase("riichi",7,"5mr",combo=listOf("5m"),response=false)
                 gate.observe(state); gate.toggle()
@@ -245,7 +268,7 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 gate.observe(live(2).put("modelExperimental",true))
                 check(!gate.isEnabled() && gate.poll(null)==null)
             }
-            ModelContractChecks.run(targetContext, context)
+            if (!controllerOnly) ModelContractChecks.run(targetContext, context)
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)
         }.onFailure {
