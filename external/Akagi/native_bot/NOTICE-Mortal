@@ -1,0 +1,19 @@
+Selected Mortal support was adapted from linyuanjianying/lsp-majsoul-unlock,
+v0.9.3 (721192d70259bdb7e61d5199d6ddd1b12be12b83) and selected fixes through
+d6dfcd828506e27cfdab55d7d78dba56e00e5f6d. Contributor: linyuanjianying.
+
+The Mortal observation and network ports reference and reproduce portions of
+Equim-chan/Mortal (https://github.com/Equim-chan/Mortal), licensed under the
+GNU Affero General Public License version 3. That license is included in
+hook-probe/src/main/assets/licenses/Mortal-LICENSE.txt.
+
+Mortal-derived modules: mortal.rs, mortal_obs.rs, state_features.rs,
+state_features_3p.rs and their associated feature-table adaptations.
+Existing Akagi code retains its Apache-2.0 notices. The repository root's
+GPL-3.0 license is preserved; this notice identifies the additional upstream
+terms for the Mortal-derived components.
+
+Integration changes by YeFeng233: limit import to experimental 4-player v4;
+fix feature, ranking, masking and activation behavior; keep experimental
+models out of unattended execution. Models and weights are not supplied by
+this integration. The original authors do not endorse this application.

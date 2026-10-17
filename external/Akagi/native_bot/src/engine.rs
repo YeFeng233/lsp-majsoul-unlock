@@ -23,6 +23,10 @@ use crate::action_codec::{pick_by_logits, rank_by_logits};
 use crate::adapt::{obs_and_legal_3p, obs_and_legal_4p};
 use crate::mjai_compat::{parse_line, sanitize_3p};
 use crate::model::{ExternalActivateFn, ExternalInferenceFn, Model};
+use crate::mortal::{
+    active_contract, encode_mortal_obs_3p, encode_mortal_obs_4p, rank_by_mortal_logits,
+    CustomContract,
+};
 
 /// How many ranked candidates the engine surfaces for the HUD's multi-row
 /// recommendation card (top-N by policy probability).
@@ -132,7 +136,9 @@ impl Engine {
     fn with_model(model: Model, num_players: u8, seat: u8, rule: GameRule) -> Result<Self> {
         let backend = if num_players == 3 {
             Backend::Three {
-                state: Box::new(GameState3P::new(0, true, None, 0, rule)),
+                // Keep mjai logging on: it is the only place riichienv records the
+                // per-discard tsumogiri bit, which the observation encoder needs.
+                state: Box::new(GameState3P::new(0, false, None, 0, rule)),
                 model,
             }
         } else {
@@ -156,7 +162,7 @@ impl Engine {
                 *state = Box::new(GameState::new(0, true, None, 0, rule))
             }
             Backend::Three { state, .. } => {
-                *state = Box::new(GameState3P::new(0, true, None, 0, rule))
+                *state = Box::new(GameState3P::new(0, false, None, 0, rule))
             }
         }
     }
@@ -173,20 +179,7 @@ impl Engine {
         self.num_players
     }
 
-    /// Drive one already-parsed mjai event through the engine.
-    ///
-    /// Sanma events are sanitized first: Tenhou sanma logs carry 4-element
-    /// `scores`/`tehais` arrays that a 3-seat `GameState3P` would index out of
-    /// bounds on. Akagi's live bridge builds its events itself and never trips
-    /// this, but the extractor's logs do.
-    ///
-    /// This can only fix what survives parsing. Raw JSONL needs
-    /// [`Engine::feed_line`] (or [`crate::mjai_compat::parse_line`]): a sanma
-    /// log's `nukidora` has to be renamed to `kita` *before* serde sees it, or
-    /// it deserializes into `MjaiEvent::Other` and the event is lost.
     pub fn feed(&mut self, ev: MjaiEvent) {
-        // The chankan check needs the kakan's actor/tile after the event is
-        // applied — `apply_mjai_event` consumes it.
         let opponent_kakan = match &ev {
             MjaiEvent::Kakan { actor, pai } if *actor as u8 != self.seat => {
                 Some((*actor as u8, pai.clone()))
@@ -211,10 +204,6 @@ impl Engine {
         }
     }
 
-    /// Drive one raw mjai JSONL line through the engine, applying both
-    /// compatibility fixups. Returns `false` for a line the engine doesn't model
-    /// (blank, malformed, or an event type riichienv has no variant for), which
-    /// callers replaying a log simply skip.
     pub fn feed_line(&mut self, line: &str) -> bool {
         match parse_line(line, self.num_players) {
             Some(ev) => {
@@ -229,57 +218,109 @@ impl Engine {
     /// legal action (not our turn / nothing to respond to).
     pub fn decide(&mut self) -> Result<Option<Decision>> {
         let seat = self.seat;
+        let contract = active_contract(self.num_players);
         let (mut ranked, logits, last_discarder, drawn, reach_pai, forced) = match &mut self.backend
         {
             Backend::Four { state, model } => {
-                // `last_discard` is `(discarder_pid, tile)`.
                 let last_discarder = state.last_discard.map(|(pid, _tile)| pid);
                 let drawn = state.drawn_tile;
-                let (obs, legal) = obs_and_legal_4p(state, seat);
-                if legal.is_empty() {
-                    return Ok(None);
-                }
-                // Forced ⇔ the *legal* set is a singleton — `ranked` is cut to
-                // SHOW_TOP_N below, so its length can't be used for this.
-                let forced = legal.len() == 1;
-                let logits = model.forward_logits(&obs)?;
-                let ranked = rank_by_logits(&legal, &logits, 4, SHOW_TOP_N);
-                let Some((top, _)) = ranked.first() else {
-                    return Ok(None);
-                };
-                let reach_pai = if top.action_type == ActionType::Riichi {
-                    predict_reach_discard(state, model, seat, 4)
+
+                if model.uses_external() {
+                    if let Some((ranked, logits, reach_pai, forced)) =
+                        decide_mortal_4p(state, model, seat, &contract)
+                    {
+                        (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                    } else {
+                        let (obs, legal) = obs_and_legal_4p(state, seat);
+                        if legal.is_empty() {
+                            return Ok(None);
+                        }
+                        let forced = legal.len() == 1;
+                        let logits = match &contract {
+                            CustomContract::AkagiOnnx => model.forward_logits(&obs)?,
+                            _ => model.forward_bundled_logits(&obs)?,
+                        };
+                        let ranked = rank_by_logits(&legal, &logits, 4, SHOW_TOP_N);
+                        let Some((top, _)) = ranked.first() else {
+                            return Ok(None);
+                        };
+                        let reach_pai = if top.action_type == ActionType::Riichi {
+                            predict_reach_discard(state, model, seat, 4)
+                        } else {
+                            None
+                        };
+                        (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                    }
                 } else {
-                    None
-                };
-                (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                    let (obs, legal) = obs_and_legal_4p(state, seat);
+                    if legal.is_empty() {
+                        return Ok(None);
+                    }
+                    let forced = legal.len() == 1;
+                    let logits = model.forward_logits(&obs)?;
+                    let ranked = rank_by_logits(&legal, &logits, 4, SHOW_TOP_N);
+                    let Some((top, _)) = ranked.first() else {
+                        return Ok(None);
+                    };
+                    let reach_pai = if top.action_type == ActionType::Riichi {
+                        predict_reach_discard(state, model, seat, 4)
+                    } else {
+                        None
+                    };
+                    (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                }
             }
             Backend::Three { state, model } => {
                 let last_discarder = state.last_discard.map(|(pid, _tile)| pid);
                 let drawn = state.drawn_tile;
-                let (obs, legal) = obs_and_legal_3p(state, seat);
-                if legal.is_empty() {
-                    return Ok(None);
-                }
-                let forced = legal.len() == 1;
-                let logits = model.forward_logits(&obs)?;
-                let ranked = rank_by_logits(&legal, &logits, 3, SHOW_TOP_N);
-                let Some((top, _)) = ranked.first() else {
-                    return Ok(None);
-                };
-                let reach_pai = if top.action_type == ActionType::Riichi {
-                    predict_reach_discard_3p(state, model, seat)
+
+                if model.uses_external() {
+                    if let Some((ranked, logits, reach_pai, forced)) =
+                        decide_mortal_3p(state, model, seat, &contract)
+                    {
+                        (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                    } else {
+                        let (obs, legal) = obs_and_legal_3p(state, seat);
+                        if legal.is_empty() {
+                            return Ok(None);
+                        }
+                        let forced = legal.len() == 1;
+                        let logits = match &contract {
+                            CustomContract::AkagiOnnx => model.forward_logits(&obs)?,
+                            _ => model.forward_bundled_logits(&obs)?,
+                        };
+                        let ranked = rank_by_logits(&legal, &logits, 3, SHOW_TOP_N);
+                        let Some((top, _)) = ranked.first() else {
+                            return Ok(None);
+                        };
+                        let reach_pai = if top.action_type == ActionType::Riichi {
+                            predict_reach_discard_3p(state, model, seat)
+                        } else {
+                            None
+                        };
+                        (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                    }
                 } else {
-                    None
-                };
-                (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                    let (obs, legal) = obs_and_legal_3p(state, seat);
+                    if legal.is_empty() {
+                        return Ok(None);
+                    }
+                    let forced = legal.len() == 1;
+                    let logits = model.forward_logits(&obs)?;
+                    let ranked = rank_by_logits(&legal, &logits, 3, SHOW_TOP_N);
+                    let Some((top, _)) = ranked.first() else {
+                        return Ok(None);
+                    };
+                    let reach_pai = if top.action_type == ActionType::Riichi {
+                        predict_reach_discard_3p(state, model, seat)
+                    } else {
+                        None
+                    };
+                    (ranked, logits, last_discarder, drawn, reach_pai, forced)
+                }
             }
         };
 
-        // An mjai `reach` must name the discard or autoplay stalls (Majsoul fuses
-        // declaring and discarding into one click). If the riichi-discard
-        // prediction failed, drop riichi from the ranking rather than emit a
-        // reach we cannot complete — the next-best action is a plain discard.
         if reach_pai.is_none()
             && matches!(ranked.first(), Some((a, _)) if a.action_type == ActionType::Riichi)
         {
@@ -309,10 +350,22 @@ impl Engine {
         }
     }
 
-    /// The tile the local model would discard if it declared riichi right now,
-    /// as an mjai string. Used by the API-backed runner as a fallback for the
-    /// reach two-step (declare → discard) when the remote follow-up call fails.
-    /// `None` if there is no riichi-legal discard from the current state.
+    pub fn uses_experimental_policy(&self) -> bool {
+        self.uses_external_policy() && !matches!(active_contract(self.num_players), CustomContract::AkagiOnnx)
+    }
+
+    /// Return a human-readable description of the active model for the HUD.
+    pub fn active_model_label(&self) -> &'static str {
+        if !self.uses_external_policy() {
+            return "Akagi 内置策略";
+        }
+        match active_contract(self.num_players) {
+            CustomContract::AkagiOnnx => "自定义 ONNX 策略",
+            CustomContract::MortalOnnx(_) => "自定义 Mortal (ONNX)",
+            CustomContract::MortalPth(_) => "自定义 Mortal (PTH)",
+        }
+    }
+
     pub fn reach_discard(&mut self) -> Option<String> {
         let seat = self.seat;
         match &mut self.backend {
@@ -326,10 +379,117 @@ impl Engine {
     }
 }
 
-/// Map a ranked `(Action, prob)` list into displayable `(BotAction, prob)`
-/// candidates. The riichi-discard prediction is applied only to the top action
-/// (index 0) — predicting it for every runner-up would run the model N extra
-/// times for tiles that only decorate an alternative row.
+fn eval_mortal_logits(
+    obs: &[f32],
+    model: &Model,
+    contract: &CustomContract,
+    legal: &[Action],
+    players: u8,
+) -> Option<Vec<f32>> {
+    match contract {
+        CustomContract::MortalPth(pth) => match pth.forward_logits(obs) {
+            Ok(logits) if logits.iter().all(|v| v.is_finite()) => Some(logits),
+            _ => {
+                model.mark_external_failed();
+                None
+            }
+        },
+        CustomContract::MortalOnnx(meta) => {
+            // The host receives a real legal mask appended after the observation.
+            let mut input = obs.to_vec();
+            let mut mask = vec![0.0; meta.action_space];
+            for action in legal {
+                if let Some(i) = crate::mortal::mortal_action_index(action, players) {
+                    if i < mask.len() { mask[i] = 1.0; }
+                }
+            }
+            input.extend(mask);
+            model.forward_external_custom(&input, meta.action_space)
+        },
+        CustomContract::AkagiOnnx => None,
+    }
+}
+
+fn decide_mortal_4p(
+    state: &mut GameState,
+    model: &Model,
+    seat: u8,
+    contract: &CustomContract,
+) -> Option<(Vec<(Action, f32)>, Vec<f32>, Option<u8>, bool)> {
+    let in_channels = match contract {
+        CustomContract::MortalPth(pth) => pth.meta.in_channels,
+        CustomContract::MortalOnnx(meta) => meta.in_channels,
+        CustomContract::AkagiOnnx => return None,
+    };
+    let (obs, legal) = encode_mortal_obs_4p(state, seat, in_channels);
+    if legal.is_empty() {
+        return None;
+    }
+    let forced = legal.len() == 1;
+    let logits = eval_mortal_logits(&obs, model, contract, &legal, 4)?;
+    let ranked = rank_by_mortal_logits(&legal, &logits, 4, SHOW_TOP_N);
+    let (top, _) = ranked.first()?;
+    let reach_pai = if top.action_type == ActionType::Riichi {
+        let mut clone = state.clone();
+        clone.apply_mjai_event(MjaiEvent::Reach {
+            actor: seat as usize,
+        });
+        let (obs_r, legal_r) = encode_mortal_obs_4p(&mut clone, seat, in_channels);
+        if legal_r.is_empty() {
+            None
+        } else {
+            let logits_r = eval_mortal_logits(&obs_r, model, contract, &legal_r, 4)?;
+            rank_by_mortal_logits(&legal_r, &logits_r, 4, 1)
+                .into_iter()
+                .next()
+                .and_then(|(a, _)| a.tile)
+        }
+    } else {
+        None
+    };
+    Some((ranked, logits, reach_pai, forced))
+}
+
+fn decide_mortal_3p(
+    state: &mut GameState3P,
+    model: &Model,
+    seat: u8,
+    contract: &CustomContract,
+) -> Option<(Vec<(Action, f32)>, Vec<f32>, Option<u8>, bool)> {
+    let in_channels = match contract {
+        CustomContract::MortalPth(pth) => pth.meta.in_channels,
+        CustomContract::MortalOnnx(meta) => meta.in_channels,
+        CustomContract::AkagiOnnx => return None,
+    };
+    let (obs, legal) = encode_mortal_obs_3p(state, seat, in_channels);
+    if legal.is_empty() {
+        return None;
+    }
+    let forced = legal.len() == 1;
+    let logits = eval_mortal_logits(&obs, model, contract, &legal, 3)?;
+    let ranked = rank_by_mortal_logits(&legal, &logits, 3, SHOW_TOP_N);
+    let (top, _) = ranked.first()?;
+    let reach_pai = if top.action_type == ActionType::Riichi {
+        let mut clone = state.clone();
+        clone.apply_mjai_event(MjaiEvent::Reach {
+            actor: seat as usize,
+        });
+        let (obs_r, legal_r) = encode_mortal_obs_3p(&mut clone, seat, in_channels);
+        if legal_r.is_empty() {
+            None
+        } else {
+            let logits_r = eval_mortal_logits(&obs_r, model, contract, &legal_r, 3)?;
+            rank_by_mortal_logits(&legal_r, &logits_r, 3, 1)
+                .into_iter()
+                .next()
+                .and_then(|(a, _)| a.tile)
+        }
+    } else {
+        None
+    };
+    Some((ranked, logits, reach_pai, forced))
+}
+
 fn build_candidates(
     ranked: &[(Action, f32)],
     seat: u8,
@@ -347,8 +507,6 @@ fn build_candidates(
         .collect()
 }
 
-/// Predict the tile we'd discard on a riichi declaration, by advancing a clone
-/// past the reach and asking the model for the (riichi-legal) discard.
 fn predict_reach_discard(state: &GameState, model: &Model, seat: u8, np: u8) -> Option<u8> {
     let mut clone = state.clone();
     clone.apply_mjai_event(MjaiEvent::Reach {
@@ -377,13 +535,6 @@ fn predict_reach_discard_3p(state: &GameState3P, model: &Model, seat: u8) -> Opt
     a.tile
 }
 
-/// Turn a riichienv `Action` (plus the little bit of table context the reply
-/// needs) into a [`BotAction`].
-///
-/// `last_discarder` is a **seat id**, taken from `GameState::last_discard.0`.
-/// It becomes the `target` of every claim (pon/chi/daiminkan) and of a ron —
-/// mjai consumers use it to identify the losing seat, so feeding a tile id here
-/// produces an out-of-range seat.
 fn build_bot_action(
     a: &Action,
     seat: u8,
@@ -449,9 +600,6 @@ mod tests {
         Action::new(kind, tile, consumed, Some(0))
     }
 
-    // ---------- `build_bot_action` field mapping (pure) ----------
-
-    /// Every claim and a ron carry the **discarder's seat** as `target`.
     #[test]
     fn claims_and_ron_target_the_discarder_seat() {
         let discarder = Some(3u8);
@@ -501,8 +649,6 @@ mod tests {
         assert_eq!(ron, BotAction::Hora { target: 3 });
     }
 
-    /// A tsumo is a self-target hora; a ron with no recorded discarder degrades
-    /// to self rather than an out-of-range seat.
     #[test]
     fn tsumo_targets_self() {
         let seat = 2u8;
@@ -594,18 +740,8 @@ mod tests {
         );
     }
 
-    // ---------- end-to-end: the seat/tile confusion `decide()` used to have ----------
-
-    /// Regression: `GameState::last_discard` is `(discarder_pid, tile)`, but
-    /// `decide()` destructured it as `(_, pid)` and handed the **tile id** to
-    /// `build_bot_action` as the discarder's seat. Every pon/chi/kan/ron reply
-    /// then carried a `target` of 0..=135 instead of a seat number, which lands
-    /// straight on Akagi's mjai bus.
     #[test]
     fn claim_target_is_a_seat_not_a_tile_id() {
-        // Our seat holds two 9s (tile ids 104..107), so seat 1's 9s discard opens
-        // a pon window. 9s is tile34 26 — a tile id far outside the seat range,
-        // so a regressed `target` can never coincide with the right answer.
         let ours = r#"["9s","9s","1m","2m","3m","4m","5m","6m","7m","8m","9m","1p","2p"]"#;
         let other = r#"["1m","2m","3m","4m","5m","6m","7m","8m","9m","1p","2p","3p","4p"]"#;
         let mut eng = crate::defaults::engine(4, 0).expect("bundled 4p weights");
@@ -648,10 +784,6 @@ mod tests {
         );
     }
 
-    /// Regression: `feed_line` must apply the pre-parse `nukidora`→`kita` rename.
-    /// Parsed straight through serde, a Tenhou sanma nukidora becomes
-    /// `MjaiEvent::Other` and is dropped — the engine's kita counts would drift
-    /// silently away from the real table.
     #[test]
     fn feed_line_applies_the_nukidora_rename() {
         let h = r#"["1m","9m","1p","2p","3p","4p","5p","6p","7p","8p","9p","N","N"]"#;
@@ -668,15 +800,11 @@ mod tests {
             "a nukidora must reach the engine, not be skipped as an unknown type"
         );
 
-        // Unmodelled / blank / malformed lines are skipped, not applied.
         assert!(!eng.feed_line(""));
         assert!(!eng.feed_line("{oops"));
         assert!(!eng.feed_line(r#"{"type":"some_future_event"}"#));
     }
 
-    /// A sanma engine must survive a Tenhou-style 4-seat `start_kyoku` (the
-    /// extractor sanitizes these; `feed` used to pass them straight through to a
-    /// 3-seat state, which indexes out of bounds).
     #[test]
     fn feed_sanitizes_four_seat_sanma_start_kyoku() {
         let h = r#"["1m","9m","1p","2p","3p","4p","5p","6p","7p","8p","9p","1s","2s"]"#;

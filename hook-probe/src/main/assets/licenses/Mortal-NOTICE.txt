@@ -1,0 +1,12 @@
+Mortal: https://github.com/Equim-chan/Mortal
+Mortal-derived observation/network code: AGPL-3.0-only.
+Selected integration contributions: linyuanjianying/lsp-majsoul-unlock
+(v0.9.3 and selected subsequent fixes), adapted by YeFeng233.
+Existing Akagi components retain their Apache-2.0 notices.
+The application repository retains its GPL-3.0 license and includes these
+additional third-party notices and the full Mortal license text.
+
+Experimental support is limited to 4-player Mortal v4, for manual advice.
+Feature tables contain approximations and are not claimed to reproduce the
+upstream model's full trained input pipeline. No Mortal model weights are
+bundled. Neither upstream project endorses this application.

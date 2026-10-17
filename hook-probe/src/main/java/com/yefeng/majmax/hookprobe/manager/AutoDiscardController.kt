@@ -68,6 +68,10 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
     @Synchronized fun observe(result: JSONObject) {
         latest = JSONObject(result.toString())
         if (!enabled) return
+        if (result.optBoolean("modelExperimental")) {
+            pause("实验性 Mortal 模型仅供手动参考，无人值守已关闭")
+            return
+        }
         if (result.optString("status") != "live" || result.optBoolean("modelFallback")) {
             suspend("等待牌局同步或模型恢复 · 无人值守模式保持开启"); return
         }
@@ -112,6 +116,10 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
     }
 
     private fun offer(result: JSONObject) {
+        if (result.optBoolean("modelExperimental")) {
+            if (enabled) pause("实验性 Mortal 模型仅供手动参考，无人值守已关闭")
+            return
+        }
         if (!enabled || pending != null || !result.optBoolean("canAct") || result.optBoolean("inputPending")) return
         val first = result.optJSONArray("recommendations")?.optJSONObject(0) ?: return
         // No server prompt (for example after restoration): wait for the next synchronized action.
@@ -154,6 +162,7 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
                 }
                 if (ack.optString("id") != pending?.optString("id")) continue
                 when (ack.optString("state")) {
+                    "probe" -> { log("CLAIM_PROBE ${ack.optString("reason")}") }
                     "waiting" -> { log("GAME_WAITING ${ack.optString("reason")}") }
                     "submitted" -> { submitted = true; log("GAME_SUBMITTED id=${ack.optString("id")}") }
                     "accepted" -> { accepted = true; log("SERVER_ACCEPTED id=${ack.optString("id")}") }

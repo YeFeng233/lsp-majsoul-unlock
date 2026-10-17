@@ -2,10 +2,9 @@
 name = "native_bot"
 version = "0.1.0"
 edition = "2021"
-description = "Built-in, libriichi-free mahjong bot for Akagi: shared obs/action codec, BC-trained CNN inference (candle), and a training-data extractor."
-# Matches the workspace root's LICENSE.txt / NOTICE. This crate is original work
-# built on riichienv-core (Apache-2.0); it derives from no copyleft source.
-license = "Apache-2.0"
+description = "Local Akagi mahjong policy inference and an experimental four-player Mortal v4 port."
+# Existing Akagi code: Apache-2.0. Mortal-derived modules: AGPL-3.0-only; see NOTICE-Mortal.
+license = "Apache-2.0 AND AGPL-3.0-only"
 
 [lib]
 name = "native_bot"

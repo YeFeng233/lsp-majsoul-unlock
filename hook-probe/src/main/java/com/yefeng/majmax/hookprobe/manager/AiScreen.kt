@@ -50,7 +50,7 @@ internal fun AiScreen(padding: PaddingValues) {
     var showLicense by remember { mutableStateOf(false) }
     var fourModel by remember { mutableStateOf(OnnxModelStore.info(context, 4)) }
     var threeModel by remember { mutableStateOf(OnnxModelStore.info(context, 3)) }
-    var modelMessage by remember { mutableStateOf("仅接受符合 Akagi 策略协议的 ONNX 文件；PyTorch/Mortal 权重包不能只改后缀导入。模型仅保存在本机；和牌率、向听与放铳风险仍由 Akagi 分析计算。") }
+    var modelMessage by remember { mutableStateOf("支持 Akagi ONNX，以及实验性四麻 Mortal v4（ONNX/PTH/PT，128 MiB）。Mortal 仅供手动参考，不接入无人值守；三麻 Mortal 暂不开放。模型仅保存在本机。") }
     val scope = rememberCoroutineScope()
     val status by AiStatus.state.collectAsStateWithLifecycle()
     val autoStatus by AutoDiscardState.state.collectAsStateWithLifecycle()
@@ -113,6 +113,7 @@ internal fun AiScreen(padding: PaddingValues) {
                 Text("关闭模式后可正常退出游戏；收纳后点击“停”浮标会先关闭无人值守模式。整场结束后不会自动创建新对局。", style = MaterialTheme.typography.bodySmall)
             }
         }
+        Text("实验性 Mortal v4 仅支持四麻：特征含近似计算，暂不开放三麻 Mortal 或无人值守。", style = MaterialTheme.typography.bodySmall)
         Text("策略模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         PolicyModelCard(
             players = 4, model = fourModel, selectedCustom = OnnxModelStore.selectedCustom(context, 4),
@@ -187,17 +188,17 @@ internal fun AiScreen(padding: PaddingValues) {
                 Text("如何理解这些指标", fontWeight = FontWeight.SemiBold)
                 Text("和牌率仅在听牌时显示；未听牌时显示向听数和进张。放铳风险指数包含打点权重，越低越好，并非实际放铳概率。分析只使用己方手牌与公开牌面。")
                 Text("使用 Akagi 的本地轻量模型，支持普通四麻和三麻。自检使用内置样例，窗口会明确标记“非当前牌局”。")
-                TextButton(onClick = { showLicense = true }) { Text("Akagi 开源许可") }
+                TextButton(onClick = { showLicense = true }) { Text("助手开源许可") }
             }
         }
     }
     if (showLicense) {
         val license = remember {
-            listOf("licenses/Akagi-NOTICE.txt", "licenses/Akagi-LICENSE.txt").joinToString("\n\n") { name ->
+            listOf("licenses/Akagi-NOTICE.txt", "licenses/Akagi-LICENSE.txt", "licenses/Mortal-NOTICE.txt", "licenses/Mortal-LICENSE.txt").joinToString("\n\n") { name ->
                 runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrDefault(name)
             }
         }
-        AlertDialog(onDismissRequest = { showLicense = false }, title = { Text("Akagi · Apache-2.0") },
+        AlertDialog(onDismissRequest = { showLicense = false }, title = { Text("Akagi / Mortal 开源许可") },
             text = { Text(license, Modifier.verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall) },
             confirmButton = { TextButton(onClick = { showLicense = false }) { Text("关闭") } })
     }
@@ -218,7 +219,7 @@ private fun PolicyModelCard(
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(if (players == 4) "四麻模型" else "三麻模型", fontWeight = FontWeight.SemiBold)
-            Text("当前：${if (selectedCustom && model != null) "自定义 ONNX" else "内置 Akagi"}")
+            Text("当前：${if (selectedCustom && model != null) model.format else "内置 Akagi"}")
             if (model != null) {
                 Text("${model.name} · ${"%.1f".format(model.bytes / (1024f * 1024f))} MiB · SHA-256 ${model.sha256.take(12)}",
                     style = MaterialTheme.typography.bodySmall)
@@ -231,7 +232,7 @@ private fun PolicyModelCard(
                     TextButton(onClick = onDelete) { Text("删除") }
                 }
             }
-            Button(onClick = onImport) { Text("导入 .onnx") }
+            Button(onClick = onImport) { Text("导入 .onnx / .pth") }
             Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

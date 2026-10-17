@@ -7,10 +7,11 @@ use akagi_mobile_core::{
 };
 use native_bot::engine::{BotAction, Engine};
 use native_bot::model::{ExternalActivateFn, ExternalInferenceFn};
+use native_bot::mortal::{load_pth, set_custom_onnx_contract};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    ffi::{c_char, CString},
+    ffi::{c_char, CStr, CString},
     panic::{catch_unwind, AssertUnwindSafe},
     slice,
     sync::{atomic::{AtomicU8, Ordering}, Mutex, OnceLock},
@@ -34,6 +35,7 @@ struct Assistant {
     step: u64,
     operations: Value,
     operation_seat: Option<u64>,
+    last_discard: Option<(u8, String)>,
 }
 
 fn waiting(message: &str) -> Value {
@@ -46,7 +48,7 @@ impl Assistant {
             flows: HashMap::new(), active: None, tracker: GameTracker::new(),
             engine: None, round_ready: false, input_pending: false, revision: 0, step: 0,
             operations: json!([]),
-            operation_seat: None,
+            operation_seat: None, last_discard: None,
         }
     }
 
@@ -158,6 +160,11 @@ impl Assistant {
                 _ => None,
             };
         }
+        match event {
+            MjaiEvent::Dahai { actor, pai, .. } => self.last_discard = Some((*actor, pai.to_string())),
+            MjaiEvent::Reach { .. } | MjaiEvent::ReachAccepted { .. } => {},
+            _ => self.last_discard = None,
+        }
         self.tracker.handle(event)?;
         if let Some(engine) = self.engine.as_mut() {
             engine.feed_line(&serde_json::to_string(event)?);
@@ -198,6 +205,11 @@ impl Assistant {
             }
         }
         let own = &snap.players[seat as usize];
+        let model_label = self
+            .engine
+            .as_ref()
+            .map(Engine::active_model_label)
+            .unwrap_or("Akagi 内置策略");
         Ok(json!({
             "status":"live", "message": if can_act { "轮到你操作" } else { "等待其他玩家" },
             "revision":self.revision, "step":self.step, "connection":self.active.map(|id| id.to_string()),
@@ -206,10 +218,10 @@ impl Assistant {
             "turn":snap.turn_count, "hand":own.tehai, "canAct":can_act,
             "analysis":analysis, "recommendations":recommendations,
             "elapsedMs":begin.elapsed().as_millis() as u64,
-            "model":if self.engine.as_ref().is_some_and(Engine::uses_external_policy) { "自定义 ONNX 策略" } else { "Akagi 内置策略" },
-            "modelFallback":custom_fallback, "estimated":true,
+            "model":model_label,
+            "modelFallback":custom_fallback, "modelExperimental":self.engine.as_ref().is_some_and(Engine::uses_experimental_policy), "estimated":true,
             "legalOperations":if self.operation_seat == Some(seat as u64) { self.operations.clone() } else { json!([]) },
-            "autoContext":{"wind":snap.bakaze,"kyoku":snap.kyoku,"honba":snap.honba,
+            "autoContext":{"lastDiscard":self.last_discard.as_ref().map(|(seat,tile)| json!({"seat":seat,"tile":tile})),"wind":snap.bakaze,"kyoku":snap.kyoku,"honba":snap.honba,
                 "drawnTile":own.drawn_tile,"riichi":own.riichi_declared || own.riichi_stage,
                 "phase":snap.phase,"melds":own.melds},
         }))
@@ -296,6 +308,37 @@ pub extern "C" fn majmax_ai_set_policy_mask(mask: u8) {
     POLICY_MASK.store(mask & 0b11, Ordering::Relaxed);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn majmax_ai_load_mortal_pth(expected_players: u8, path: *const c_char, activate: u8) -> i32 {
+    if path.is_null() {
+        return -1;
+    }
+    let Ok(path_str) = CStr::from_ptr(path).to_str() else {
+        return -1;
+    };
+    match catch_unwind(AssertUnwindSafe(|| load_pth(expected_players, path_str, activate != 0))) {
+        Ok(status) => status,
+        Err(_) => -6,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn majmax_ai_set_custom_contract(
+    players: u8,
+    kind: u8,
+    version: u8,
+    in_channels: u32,
+    action_space: u32,
+) {
+    set_custom_onnx_contract(
+        players,
+        kind,
+        version,
+        in_channels as usize,
+        action_space as usize,
+    );
+}
+
 /// Called only by the manager's background worker. Nothing here runs in the game process.
 #[no_mangle]
 pub unsafe extern "C" fn majmax_ai_frame(connection: u64, direction: u8, data: *const u8, len: usize) -> *mut c_char {
@@ -336,6 +379,21 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use prost::Message;
     use prost_reflect::DynamicMessage;
+
+    #[test]
+    fn claim_context_comes_from_protocol_and_clears_on_next_draw() {
+        let mut host = Assistant::new();
+        authenticate(&mut host, 4);
+        live_round(&mut host, 4);
+        let discard: MjaiEvent = serde_json::from_value(json!({
+            "type":"dahai", "actor":0, "pai":"9s", "tsumogiri":true
+        })).unwrap();
+        host.feed(&discard).unwrap();
+        assert_eq!(host.render().unwrap()["autoContext"]["lastDiscard"],json!({"seat":0,"tile":"9s"}));
+        let draw: MjaiEvent = serde_json::from_value(json!({"type":"tsumo","actor":1,"pai":"?"})).unwrap();
+        host.feed(&draw).unwrap();
+        assert!(host.render().unwrap()["autoContext"]["lastDiscard"].is_null());
+    }
 
     #[test]
     fn automation_actions_preserve_target_and_consumed_red_tiles() {

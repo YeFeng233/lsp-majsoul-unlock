@@ -174,6 +174,7 @@ internal class AiFloatingWindow(private val context: Context, private val stop: 
         content.addView(label(result.optString("round").replace("E", "东").replace("S", "南")
             .replace("W", "西").replace("N", "北") + " · ${result.optInt("players", 4)}人", 12f, muted))
         val analysis = result.optJSONObject("analysis") ?: return
+        if (result.optBoolean("modelExperimental")) content.addView(label("实验性 Mortal v4 · 仅供手动参考", 12f, muted))
         val rows = result.optJSONArray("recommendations") ?: JSONArray()
         if (rows.length() == 0) {
             content.addView(label("等待操作机会", 21f, green, true))

@@ -77,6 +77,10 @@ jobs:
         working-directory: hook-probe/rust-modder
         run: cargo test --release --locked --target-dir ../build/rust
 
+      - name: Test selected Mortal integration and feature regressions
+        working-directory: external/Akagi/native_bot
+        run: cargo test --release --locked --target-dir ../../../hook-probe/build/rust --lib --test mortal_feature_regressions --test mortal_ranking_regressions --test mortal_state_obs --test shanten_len_div3
+
       - name: Build Rust engines and native bridges for all ABIs
         shell: pwsh
         run: ./hook-probe/build-native.ps1 -NdkPath "$env:ANDROID_HOME/ndk/27.2.12479018" -Abis all
@@ -119,6 +123,30 @@ jobs:
             echo "$APK signing certificate SHA-256: $ACTUAL_SHA256"
             test "$ACTUAL_SHA256" = '375638284d8b7d9889ab3c0ed7afd0d597d2c648144813bb4936f37daa665c0f'
           done
+
+      - name: Build Android controller and model contract tests
+        env:
+          ANDROID_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
+        run: ./gradlew -p hook-probe --no-daemon -PbuildSha="${GITHUB_SHA:0:7}" assembleUniversalDebugAndroidTest
+
+      - name: Enable KVM for Android tests
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test controllers, model contracts and JNI on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            adb install -r hook-probe/build/outputs/apk/universal/debug/MajsoulHookProbe-universal-debug.apk
+            adb install -r hook-probe/build/outputs/apk/androidTest/universal/debug/MajsoulHookProbe-universal-debug-androidTest.apk
+            adb shell am instrument -w com.yefeng.majmax.hookprobe.test/com.yefeng.majmax.hookprobe.manager.AutoDiscardInstrumentation | tee instrumentation.log
+            grep -q 'controller checks passed' instrumentation.log
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4

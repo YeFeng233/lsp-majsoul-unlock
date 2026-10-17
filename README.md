@@ -4,6 +4,8 @@
 
 当前正式版本为 **0.9.0**，提供 **ARM64 版**和 **Universal 通用版**。安装包和更新元数据发布在 [GitHub Releases](https://github.com/YeFeng233/lsp-majsoul-unlock/releases/latest)，本次改动见 [0.9.0 更新日志](release-notes/v0.9.0.md)。
 
+当前开发版本 **0.10.0** 选择性整合了社区分支的吃碰适配、操作诊断和实验性 Mortal 模型导入，说明见 [0.10.0 更新日志](release-notes/v0.10.0.md)。开发构建通过后可从 GitHub Actions 下载，正式更新检查仍以本仓库 Release 为准。
+
 | 版本 | 包含的 Android ABI | 适用环境 |
 | --- | --- | --- |
 | ARM64 | `arm64-v8a` | ARM64 手机，安装包较小 |
@@ -31,7 +33,9 @@
 
 无人值守模式沿用游戏原有的手牌选择、出牌、结算按钮和重连流程。执行 AI 动作前核对消息序列、游戏步骤、场风、局数、本场、座位及完整手牌，并区分赤五、手切与摸切。鸣牌严格匹配服务器提供的组合索引及消耗牌；只有客户端发送和服务器确认均通过后才继续决策，旧指令不自动重试。助手日志中的 `assistant.autoplay` 记录排队、发送、确认、等待恢复、结算继续和游戏重启，便于故障排查。建议先在机器人练习中确认当前游戏版本的兼容情况。
 
-助手页允许分别为四麻和三麻导入兼容的单文件 `.onnx` 策略模型，单文件上限为 128 MiB。自定义模型只替换动作策略，其他分析指标仍使用内置算法。导入时会验证输入输出、元数据和样例推理；不兼容时继续使用内置模型。**把 PyTorch 检查点改名为 `.onnx` 不会完成转换**，包含 `data.pkl` 的 PyTorch ZIP 文件不能直接导入。模型协议和示例导出命令见 [ONNX 模型说明](tools/README_POLICY_ONNX.md)。
+助手页允许分别为四麻和三麻导入兼容的 Akagi `.onnx` 策略模型，单文件上限为 128 MiB。0.10.0 另提供实验性的四麻 Mortal v4 导入：支持匹配结构的 `.onnx`、`.pth` 和 `.pt`，也能识别被误命名为 `.onnx` 的 PyTorch ZIP 检查点。扩展名不会改变模型协议；普通 PyTorch 文件或其他网络结构仍会被拒绝。模型协议和示例导出命令见 [模型说明](tools/README_POLICY_ONNX.md)。
+
+Mortal 当前仅接受四麻 v4（观察输入 `1012×34`、46 个动作），三麻和旧版本暂不开放。该移植的部分局面特征仍为近似实现，尚未完成与上游的完整一致性验证，因此**只显示实验性手动建议，禁止用于无人值守**；切换到该模型会关闭无人值守开关。加载和推理自检通过不代表建议质量已验证。自定义模型只替换动作策略，其他分析指标仍使用内置算法；不兼容或推理失败时回退内置模型，权重只保存在本机。
 
 ### LSPatch（实验性兼容）
 
@@ -68,8 +72,10 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 
 只构建 ARM64 时，原生脚本使用 `-Abis arm64-v8a`，Gradle 使用 `assembleArm64Debug`；只打包通用版使用 `assembleUniversalDebug`。两种 APK 使用相同包名、版本号和签名，可相互覆盖安装。本地构建要使用与已安装版本相同的签名。
 
-CI 会生成两种安装包，检查各 ABI 的运行库是否齐全、ELF 架构是否匹配、动态依赖是否完整、64 位原生库是否满足 16 KiB 页对齐，以及 APK 的签名与 ZIP 对齐。发布的 `hook-update.json` 同时列出两种产物，并以通用版作为默认资源。发布新版本时先同步应用版本号，并编写 `release-notes/<标签名>.md`；标签工作流会将该文件的自然语言更新说明写入 Release。
+CI 会运行 Lua 操作检查、Rust 特征和状态恢复回归，以及 Android 模拟器上的控制器、ONNX mask 和 JNI 导入测试。之后生成两种安装包，检查各 ABI 的运行库是否齐全、ELF 架构是否匹配、动态依赖是否完整、64 位原生库是否满足 16 KiB 页对齐，以及 APK 的签名与 ZIP 对齐。发布的 `hook-update.json` 同时列出两种产物，并以通用版作为默认资源。发布新版本时先同步应用版本号，并编写 `release-notes/<标签名>.md`；标签工作流会将该文件的自然语言更新说明写入 Release。
 
 ## 来源与许可
 
 本项目采用 GNU GPL v3 开源，完整协议见根目录的 [LICENSE](LICENSE)。MOD 消息处理代码来自 [MajsoulMax-rs](https://github.com/Xerxes-2/MajsoulMax-rs)，牌局状态、分析和内置模型来自 [Akagi](https://github.com/shinkuan/Akagi)。这些第三方文件保留各自的原始许可与声明；具体来源见 [MajsoulMax-rs 来源说明](external/MajsoulMax-rs/UPSTREAM.md)、[Akagi 来源说明](external/Akagi/UPSTREAM.md) 以及 Akagi 的 [LICENSE.txt](external/Akagi/LICENSE.txt) 和 [NOTICE](external/Akagi/NOTICE)。Akagi 内置模型不是 Mortal 模型。
+
+0.10.0 的部分适配来自 [linyuanjianying 的社区分支](https://github.com/linyuanjianying/lsp-majsoul-unlock)。Mortal 网络和特征移植参考 [Equim-chan/Mortal](https://github.com/Equim-chan/Mortal)，相关派生组件保留 AGPL-3.0 许可，来源和整合范围见 [NOTICE-Mortal](external/Akagi/native_bot/NOTICE-Mortal) 和 [Mortal 许可全文](hook-probe/src/main/assets/licenses/Mortal-LICENSE.txt)。应用内“助手开源许可”也提供这些说明。仓库未添加 Mortal 模型权重。

@@ -238,6 +238,14 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 gate.poll(ack(cmd.getString("id"),"waiting"))
                 check(gate.isEnabled() && JSONObject(checkNotNull(gate.poll(null))).getString("id")==cmd.getString("id"))
             }
+            test("experimental model cannot arm or keep pending autoplay") { gate, _ ->
+                gate.observe(live().put("modelExperimental",true)); gate.toggle()
+                check(!gate.isEnabled() && gate.poll(null)==null)
+                gate.observe(live()); gate.toggle(); check(gate.poll(null)!=null)
+                gate.observe(live(2).put("modelExperimental",true))
+                check(!gate.isEnabled() && gate.poll(null)==null)
+            }
+            ModelContractChecks.run(targetContext, context)
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)
         }.onFailure {

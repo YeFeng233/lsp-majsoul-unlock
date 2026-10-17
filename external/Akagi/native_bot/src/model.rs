@@ -69,6 +69,10 @@ impl Model {
         external: ExternalInferenceFn, activate: ExternalActivateFn) -> Result<Self> {
         let mut model = Self::from_safetensors(bytes, num_players)?;
         let status = unsafe { activate(num_players) };
+        if status != 0 {
+            model.external_failed.store(true, Ordering::Relaxed);
+            return Ok(model);
+        }
         model.external = Some(external);
         model.external_failed.store(status != 0, Ordering::Relaxed);
         Ok(model)
@@ -90,6 +94,11 @@ impl Model {
             }
             self.external_failed.store(true, Ordering::Relaxed);
         }
+        self.forward_bundled_logits(obs)
+    }
+
+    /// Run bundled Akagi Candle weights directly (used as default or fallback).
+    pub fn forward_bundled_logits(&self, obs: &[f32]) -> Result<Vec<f32>> {
         let dev = Device::Cpu;
         let x = Tensor::from_vec(
             obs.to_vec(),
@@ -106,6 +115,31 @@ impl Model {
         let x = self.fc.forward(&x)?.relu()?;
         let logits = self.head.forward(&x)?;
         logits.squeeze(0)?.to_vec1::<f32>()
+    }
+
+    /// Invoke the host ONNX callback with custom Mortal observation/action dimensions.
+    pub fn forward_external_custom(&self, obs: &[f32], action_space: usize) -> Option<Vec<f32>> {
+        let infer = self.external?;
+        let mut logits = vec![0.0f32; action_space];
+        let status = unsafe {
+            infer(
+                self.geo.num_players,
+                obs.as_ptr(),
+                obs.len(),
+                logits.as_mut_ptr(),
+                logits.len(),
+            )
+        };
+        if status == 0 && logits.iter().all(|value| value.is_finite()) {
+            Some(logits)
+        } else {
+            self.external_failed.store(true, Ordering::Relaxed);
+            None
+        }
+    }
+
+    pub fn mark_external_failed(&self) {
+        self.external_failed.store(true, Ordering::Relaxed);
     }
 
     pub fn take_external_failure(&self) -> bool {

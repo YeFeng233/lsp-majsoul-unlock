@@ -11,6 +11,8 @@ using PolicyCallback = int32_t (*)(uint8_t, const float *, size_t, float *, size
 using PolicyActivate = int32_t (*)(uint8_t);
 void majmax_ai_register_policy_callbacks(PolicyCallback callback, PolicyActivate activate);
 void majmax_ai_set_policy_mask(uint8_t mask);
+int32_t majmax_ai_load_mortal_pth(uint8_t expected_players, const char *path, uint8_t activate);
+void majmax_ai_set_custom_contract(uint8_t players, uint8_t kind, uint8_t version, uint32_t in_channels, uint32_t action_space);
 }
 
 static JavaVM *gVm = nullptr;
@@ -37,7 +39,7 @@ static int32_t activateOnnx(uint8_t players) {
 
 static int32_t inferOnnx(uint8_t players, const float *obs, size_t obsSize,
                          float *logits, size_t logitsSize) {
-    if (!gVm || !gPolicyClass || !gInferMethod || obsSize > 2048 || logitsSize > 128) return -1;
+    if (!gVm || !gPolicyClass || !gInferMethod || obsSize > 65536 || logitsSize > 128) return -1;
     JNIEnv *env = nullptr;
     bool attached = false;
     jint state = gVm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
@@ -106,6 +108,28 @@ Java_com_yefeng_majmax_hookprobe_manager_AiNative_reset(JNIEnv *, jclass) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_yefeng_majmax_hookprobe_manager_AiNative_configurePolicy(JNIEnv *, jclass, jint mask) {
     majmax_ai_set_policy_mask(static_cast<uint8_t>(mask));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_yefeng_majmax_hookprobe_manager_AiNative_loadMortalPth(
+        JNIEnv *env, jclass, jint expectedPlayers, jstring path, jboolean activate) {
+    if (!path) return -1;
+    const char *utf = env->GetStringUTFChars(path, nullptr);
+    if (!utf) return -1;
+    int32_t status = majmax_ai_load_mortal_pth(static_cast<uint8_t>(expectedPlayers), utf, activate ? 1 : 0);
+    env->ReleaseStringUTFChars(path, utf);
+    return status;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_yefeng_majmax_hookprobe_manager_AiNative_configureCustomContract(
+        JNIEnv *, jclass, jint players, jint kind, jint version, jint inChannels, jint actionSpace) {
+    majmax_ai_set_custom_contract(
+            static_cast<uint8_t>(players),
+            static_cast<uint8_t>(kind),
+            static_cast<uint8_t>(version),
+            static_cast<uint32_t>(inChannels),
+            static_cast<uint32_t>(actionSpace));
 }
 
 extern "C" JNIEXPORT jstring JNICALL

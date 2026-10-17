@@ -17,6 +17,16 @@ local function waiting(id, reason)
         ack(id, 'waiting', reason)
     end
 end
+-- Keep claim diagnostics bounded to fixed reason codes: no tiles, account data or RPC payloads.
+local function claimWaiting(id, reason)
+    waiting(id, 'claim_' .. reason)
+end
+local function claimProbe(id, stage)
+    if A.probeId ~= id then A.probeId = id; A.probeStages = {} end
+    if A.probeStages[stage] then return end
+    A.probeStages[stage] = true
+    ack(id, 'probe', 'claim_' .. stage)
+end
 local function tile(value)
     local honors = { E='1z', S='2z', W='3z', N='4z', P='5z', F='6z', C='7z' }
     if honors[value] then return honors[value] end
@@ -42,8 +52,10 @@ local function install()
             local id = A.executing
             local external = request and (request.auto_operation or (tonumber(request.timeuse) or 0) >= 1000000)
             ack(id, id and 'submitted' or (external and 'external' or 'manual'))
+            if id and A.claimExecuting == id then ack(id, 'probe', 'claim_network_intercepted') end
             local wrapped = function(error, response, ...)
                 if id then
+                    if A.claimExecuting == id then ack(id, 'probe', 'claim_network_callback') end
                     local code = response and response.error and response.error.code
                     ack(id, (not error and response and (not code or code == 0)) and 'accepted' or 'failed')
                 end
@@ -125,20 +137,28 @@ end
 local function execute(command)
     local id = command.id
     if type(id) ~= 'string' or #id > 100 or A.seen[id] then return end
+    local action = command.action
+    local claimKind = type(action) == 'table' and (action.kind == 'chi' or action.kind == 'pon')
     -- A newer heartbeat may be captured between provider polling and this tick.
     -- Wait for renewed proof; the controller revokes changed decisions/timeouts.
-    if __majmax_auto_current() ~= 'yes' then waiting(id, 'capture_proof'); return end
+    if __majmax_auto_current() ~= 'yes' then
+        if claimKind then claimWaiting(id, 'capture_proof') else waiting(id, 'capture_proof') end
+        return
+    end
     local d = DesktopMgr and DesktopMgr.Inst
     local r = d and d.mainrole
     local enums = GameUtility and GameUtility.EMJ_Mode
     local ops = GameUtility and GameUtility.E_PlayerOperation
     if not d or not r or not enums or not ops or not d.gameing or not DesktopMgr.IsActive()
-            or d.mode ~= enums.play or d.duringReconnect or d.time_stopped or not MJNetMgr.Inst:IsOK() then
-        waiting(id, 'game_window'); return
+            or d.mode ~= enums.play or d.duringReconnect or d.time_stopped
+            or not MJNetMgr or not MJNetMgr.Inst or not MJNetMgr.Inst:IsOK() then
+        waiting(id, claimKind and 'claim_game_window' or 'game_window'); return
     end
     -- The network snapshot arrives before the game's draw animation finishes.
     if d.current_step ~= command.step then
-        waiting(id, 'game_step '..tostring(d.current_step)..' expected '..tostring(command.step)); return
+        if claimKind then claimWaiting(id, 'game_step')
+        else waiting(id, 'game_step '..tostring(d.current_step)..' expected '..tostring(command.step)) end
+        return
     end
     if r._mouse_downed or r._during_drag then mark(id); ack(id, 'manual'); return end
     if r._during_liqi or r._during_reveal or r._during_reveal_liqi then
@@ -151,17 +171,22 @@ local function execute(command)
     local winds = {E=1, S=2, W=3, N=4}
     if type(context) ~= 'table' or d.seat ~= command.seat + 1 or d.index_chang ~= winds[context.wind]
             or d.index_ju ~= context.kyoku or d.index_ben ~= context.honba then
-        mark(id); ack(id, 'round_mismatch', string.format('seat %s/%s wind %s/%s ju %s/%s ben %s/%s',
+        mark(id)
+        if claimKind then ack(id, 'round_mismatch')
+        else ack(id, 'round_mismatch', string.format('seat %s/%s wind %s/%s ju %s/%s ben %s/%s',
             tostring(d.seat), tostring(command.seat+1), tostring(d.index_chang), tostring(winds[context.wind]),
-            tostring(d.index_ju), tostring(context.kyoku), tostring(d.index_ben), tostring(context.honba))); return
+            tostring(d.index_ju), tostring(context.kyoku), tostring(d.index_ben), tostring(context.honba))) end
+        return
     end
-    local action = command.action
     if type(action) ~= 'table' then mark(id); ack(id, 'unknown_action'); return end
     local kind, operation = action.kind, nil
     for _, op in ipairs(d.oplist or {}) do
         if op.type == action.type then operation = op end
     end
-    if kind ~= 'pass' and not operation then return end
+    if kind ~= 'pass' and not operation then
+        if kind == 'chi' or kind == 'pon' then claimWaiting(id, 'operation_missing') end
+        return
+    end
     if kind == 'discard' or kind == 'riichi' then
         if not r._can_discard or type(r._DoDiscardTile) ~= 'function' or type(r._setChoosePai) ~= 'function' then return end
         -- A winning window must be handled by the explicit AI recommendation.
@@ -189,8 +214,18 @@ local function execute(command)
     if #expected == 0 or table.concat(actual, ',') ~= table.concat(expected, ',') then
         mark(id); ack(id, 'hand_mismatch'); return
     end
-    local own = UI_LiqiZimo and UI_LiqiZimo.Inst
-    local claim = UI_ChiPengHu and UI_ChiPengHu.Inst
+    if claimKind then claimProbe(id, 'hand_verified') end
+    local own, claim
+    if claimKind then
+        -- Unity property access may throw before the ordinary readiness check can report.
+        -- Fixed stage codes only: do not transmit exception strings or game objects.
+        local ok
+        ok, claim = pcall(function() return UI_ChiPengHu and UI_ChiPengHu.Inst end)
+        if not ok then claimWaiting(id, 'ui_instance_exception'); return end
+    else
+        own = UI_LiqiZimo and UI_LiqiZimo.Inst
+        claim = UI_ChiPengHu and UI_ChiPengHu.Inst
+    end
     local function ready(ui)
         return ui and ui.transform and ui.transform.gameObject.activeInHierarchy and not ui.on_do_operation
             and ui.container_btns and ui.container_btns.transform.gameObject.activeInHierarchy
@@ -223,23 +258,76 @@ local function execute(command)
             if type(r._resetMouseState) == 'function' then r:_resetMouseState() end
         end
     elseif kind == 'chi' or kind == 'pon' or kind == 'kan' then
-        if not ready(claim) then return end
-        if not d.lastqipai or d.lastqipai:ToString() ~= action.tile or d.lastqipai_seat ~= action.target + 1 then
+        local uiReady, isReady = pcall(ready, claim)
+        if not uiReady then
+            if claimKind then claimWaiting(id, 'ui_readiness_exception') end
+            return
+        end
+        if not isReady then
+            if claimKind then claimWaiting(id, 'ui_not_ready') end
+            return
+        end
+        if claimKind then claimProbe(id, 'ui_ready') end
+        local targetOk, tileMatches, seatValue = pcall(function()
+            if not d.lastqipai or type(d.lastqipai.ToString) ~= 'function' then return nil, nil end
+            return d.lastqipai:ToString() == action.tile, d.lastqipai_seat
+        end)
+        -- Prefer the captured server discard to unstable presentation fields.
+        -- Legacy commands without protocol context must still pass the UI guard.
+        local source = context.lastDiscard
+        if type(source) == 'table' then
+            if context.phase ~= 'wait_response' or tile(source.tile) ~= action.tile
+                    or source.seat ~= action.target then
+                mark(id); ack(id, 'target_mismatch'); return
+            end
+        elseif not targetOk or not tileMatches or seatValue ~= action.target + 1 then
             mark(id); ack(id, 'target_mismatch'); return
         end
-        local index = action.index
-        if type(index) ~= 'number' or index < 0 or index % 1 ~= 0
-                or (operation.combination or {})[index+1] ~= action.combination then
-            mark(id); ack(id, 'illegal_combination'); return
+        if claimKind then
+            if not targetOk then claimProbe(id, 'target_read_ignored')
+            elseif tileMatches == nil then claimProbe(id, 'target_unavailable_ignored')
+            elseif not tileMatches then claimProbe(id, 'target_tile_ignored')
+            elseif seatValue ~= action.target + 1 then claimProbe(id, 'target_seat_ignored')
+            else claimProbe(id, 'target_verified') end
         end
+        local index = action.index
+        local combinationOk, combinationMatches = pcall(function()
+            return type(index) == 'number' and index >= 0 and index % 1 == 0
+                and operation.combination and operation.combination[index+1] == action.combination
+        end)
+        if not combinationOk then
+            if claimKind then claimWaiting(id, 'operation_combination_exception') end
+            return
+        end
+        if not combinationMatches then mark(id); ack(id, 'illegal_combination'); return end
+        if claimKind then claimProbe(id, 'operation_combination_verified') end
         if kind == 'kan' then
             if index ~= 0 or not button(claim, 'btn_gang', 'Btn_Gang') then return end
             run = function() claim.container_btns:Btn_Gang() end
         else
-            local values = claim.data and claim.data[kind == 'chi' and 'chi' or 'peng']
-            if not values or values[index+1] ~= action.combination then return end
-            if type(claim.OnClickDetail) ~= 'function' then return end
-            run = function() claim.choosed_op = action.type; claim:OnClickDetail(index, 1) end
+            local dataOk, values = pcall(function()
+                local data = claim.data
+                return data and data[kind == 'chi' and 'chi' or 'peng']
+            end)
+            if not dataOk then claimWaiting(id, 'ui_data_exception'); return end
+            if not values then claimWaiting(id, 'ui_data_missing'); return end
+            claimProbe(id, 'ui_data_present')
+            local valueOk, valueMatches = pcall(function() return values[index+1] == action.combination end)
+            if not valueOk then claimWaiting(id, 'ui_combination_exception'); return end
+            if not valueMatches then claimWaiting(id, 'ui_combination_mismatch'); return end
+            claimProbe(id, 'ui_combination_verified')
+            local detailOk, detail = pcall(function() return claim.OnClickDetail end)
+            if not detailOk then claimWaiting(id, 'detail_read_exception'); return end
+            if type(detail) ~= 'function' then claimWaiting(id, 'detail_unavailable'); return end
+            claimProbe(id, 'detail_available')
+            run = function()
+                claimProbe(id, 'assign_operation_begin')
+                claim.choosed_op = action.type
+                claimProbe(id, 'assign_operation_done')
+                claimProbe(id, 'detail_call_begin')
+                detail(claim, index, 1)
+                claimProbe(id, 'detail_call_returned')
+            end
         end
     elseif kind == 'ankan' or kind == 'kakan' then
         if not ready(own) or type(own.OnClickDetail) ~= 'function' then return end
@@ -276,13 +364,21 @@ local function execute(command)
         run = function() claim.container_btns:Btn_Cancel() end
     end
     if not run then mark(id); ack(id, 'unknown_action'); return end
+    if claimKind then claimProbe(id, 'commit_ready') end
     -- Recheck after all game-side checks and immediately before committing.
-    if __majmax_auto_current() ~= 'yes' then waiting(id, 'capture_proof'); return end
+    if __majmax_auto_current() ~= 'yes' then
+        if claimKind then claimWaiting(id, 'capture_proof') else waiting(id, 'capture_proof') end
+        return
+    end
+    if claimKind then claimProbe(id, 'capture_verified') end
     mark(id)
     A.executing = id
+    if claimKind then A.claimExecuting = id; claimProbe(id, 'run_begin') end
     local ok = pcall(run)
     A.executing = nil
-    if not ok then ack(id, 'game_exception') end
+    A.claimExecuting = nil
+    if not ok then ack(id, claimKind and 'claim_run_exception' or 'game_exception')
+    elseif claimKind then claimProbe(id, 'invoked') end
 end
 function __majmax_auto_tick()
     local ok = pcall(function()
