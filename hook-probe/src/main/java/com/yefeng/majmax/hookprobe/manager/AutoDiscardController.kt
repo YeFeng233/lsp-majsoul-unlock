@@ -15,7 +15,7 @@ object AutoDiscardState {
 /** One pending command, one attempt per decision window; never retries an input. */
 internal class AutoDiscardController(private val log: (String) -> Unit,
     private val now: () -> Long = SystemClock::elapsedRealtime,
-    private val delayMs: () -> Long = { java.util.concurrent.ThreadLocalRandom.current().nextLong(2_000, 5_001) },
+    private val delayMs: () -> Long = { AutoDelayRange().randomDelayMs() },
     initialEnabled: Boolean = false, private val modeChanged: (Boolean) -> Unit = {}) {
     private var enabled = initialEnabled
     private var latest: JSONObject? = null
@@ -68,10 +68,6 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
     @Synchronized fun observe(result: JSONObject) {
         latest = JSONObject(result.toString())
         if (!enabled) return
-        if (result.optBoolean("modelExperimental")) {
-            pause("实验性 Mortal 模型仅供手动参考，无人值守已关闭")
-            return
-        }
         if (result.optString("status") != "live" || result.optBoolean("modelFallback")) {
             suspend("等待牌局同步或模型恢复 · 无人值守模式保持开启"); return
         }
@@ -116,10 +112,6 @@ internal class AutoDiscardController(private val log: (String) -> Unit,
     }
 
     private fun offer(result: JSONObject) {
-        if (result.optBoolean("modelExperimental")) {
-            if (enabled) pause("实验性 Mortal 模型仅供手动参考，无人值守已关闭")
-            return
-        }
         if (!enabled || pending != null || !result.optBoolean("canAct") || result.optBoolean("inputPending")) return
         val first = result.optJSONArray("recommendations")?.optJSONObject(0) ?: return
         // No server prompt (for example after restoration): wait for the next synchronized action.

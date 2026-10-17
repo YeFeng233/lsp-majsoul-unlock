@@ -290,6 +290,43 @@ test('win result confirms only after two to five seconds and only once',function
     UnityEngine.Time.realtimeSinceStartup=due-0.001; __majmax_auto_tick(); assert(not s.continued)
     UnityEngine.Time.realtimeSinceStartup=due; __majmax_auto_tick(); __majmax_auto_tick(); assert(s.continued==1)
 end)
+
+test('configured fixed delay applies to settlement including zero',function(s)
+    for _,delay in ipairs({0,1300,5000}) do
+        local ui=resultWindow(s,'UI_Win','_onConfirm'); ui.current_index=delay
+        s.command.delayMinMs=delay; s.command.delayMaxMs=delay
+        local start=UnityEngine.Time.realtimeSinceStartup
+        local before=s.continued or 0
+        __majmax_auto_tick()
+        assert(__majmax_auto.continuation.due==start+delay/1000)
+        if delay>0 then
+            assert((s.continued or 0)==before)
+            UnityEngine.Time.realtimeSinceStartup=start+delay/1000-0.001; __majmax_auto_tick()
+            assert((s.continued or 0)==before)
+        end
+        UnityEngine.Time.realtimeSinceStartup=start+delay/1000; __majmax_auto_tick()
+        assert(s.continued==before+1)
+        UI_Win=nil; __majmax_auto_tick()
+    end
+end)
+
+test('invalid delay configuration falls back to existing safe defaults',function(s)
+    for _,range in ipairs({{-100,5000},{0,5100},{2000,1000},{101,2000},{'bad',2000},{0,0/0}}) do
+        resultWindow(s,'UI_Win','_onConfirm')
+        s.command.delayMinMs=range[1]; s.command.delayMaxMs=range[2]
+        __majmax_auto_tick()
+        assert(__majmax_auto.continuation.due>=2 and __majmax_auto.continuation.due<=5)
+        UI_Win=nil; __majmax_auto_tick()
+    end
+end)
+
+test('settlement delay changes only affect the next result page',function(s)
+    local ui=resultWindow(s,'UI_Win','_onConfirm')
+    s.command.delayMinMs=1000; s.command.delayMaxMs=1000; __majmax_auto_tick()
+    s.command.delayMinMs=3000; s.command.delayMaxMs=3000
+    UnityEngine.Time.realtimeSinceStartup=1; __majmax_auto_tick(); assert(s.continued==1)
+    ui.current_index=1; __majmax_auto_tick(); assert(__majmax_auto.continuation.due==4)
+end)
 test('all round result dialogs use their existing confirm methods',function(s)
     for _,name in ipairs({'UI_HuleShow','UI_ScoreChange','UI_ConfirmNewRound'}) do
         resultWindow(s,name,'Btn_Confirm'); __majmax_auto_tick()
@@ -328,6 +365,14 @@ test('resync uses auth and forces a complete restore with cooldown',function(s)
     UnityEngine.Time.realtimeSinceStartup=10; __majmax_auto_tick(); assert(s.resynced==1)
     MJNetMgr.Inst:SendRequest('FastTest','syncGame',{round_id='E2',step=7},function() end)
     assert(s.sent[2].round_id=='E2' and s.sent[2].step==7)
+end)
+
+test('configured zero delay resync still respects cooldown',function(s)
+    s.command={control='mode',enabled=true,resync=true,delayMinMs=0,delayMaxMs=0}
+    MJNetMgr.Inst._connectSuccess=function() s.resynced=(s.resynced or 0)+1 end
+    __majmax_auto_tick(); assert(s.resynced==1)
+    UnityEngine.Time.realtimeSinceStartup=29.999; __majmax_auto_tick(); assert(s.resynced==1)
+    UnityEngine.Time.realtimeSinceStartup=30; __majmax_auto_tick(); assert(s.resynced==2)
 end)
 test('between rounds and during reconnect never trigger extra resync',function(s)
     s.command={control='mode',enabled=true,resync=true}; DesktopMgr.Inst.gameing=false

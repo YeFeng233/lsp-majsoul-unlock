@@ -74,7 +74,8 @@ class AiOverlayService : Service() {
         val parts = message.split(' ', limit = 2)
         DiagnosticsStore.appendAssistant(this, "INFO", "assistant.autoplay", parts[0].removeSuffix(":"),
             JSONObject().put("reason", parts.getOrNull(1) ?: ""))
-    }, initialEnabled = getSharedPreferences(MODE_PREFS, MODE_PRIVATE).getBoolean(MODE_ENABLED, false),
+    }, delayMs = { AutoDelaySettings.read(this).randomDelayMs() },
+        initialEnabled = getSharedPreferences(MODE_PREFS, MODE_PRIVATE).getBoolean(MODE_ENABLED, false),
         modeChanged = { enabled ->
             getSharedPreferences(MODE_PREFS, MODE_PRIVATE).edit().putBoolean(MODE_ENABLED, enabled).commit()
         }) }
@@ -157,9 +158,11 @@ class AiOverlayService : Service() {
 
     private fun pollAuto(acks: String?): String {
         val command = auto.poll(acks)
-        return if (command != null && !demoMode.get()) JSONObject(command).put("unattended", true).toString()
+        val delay = AutoDelaySettings.read(this)
+        val response = if (command != null && !demoMode.get()) JSONObject(command).put("unattended", true)
         else JSONObject().put("control", "mode").put("enabled", auto.isEnabled() && !demoMode.get())
-            .put("resync", auto.needsSync()).put("nonce", SystemClock.elapsedRealtime()).toString()
+            .put("resync", auto.needsSync()).put("nonce", SystemClock.elapsedRealtime())
+        return response.put("delayMinMs", delay.minTenths * 100).put("delayMaxMs", delay.maxTenths * 100).toString()
     }
 
     private fun reset(message: String) {

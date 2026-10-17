@@ -74,6 +74,14 @@ end
 local function seconds()
     return UnityEngine and UnityEngine.Time and UnityEngine.Time.realtimeSinceStartup
 end
+local function delaySeconds(command)
+    local lower, upper = command.delayMinMs, command.delayMaxMs
+    if type(lower) ~= 'number' or type(upper) ~= 'number' or lower ~= lower or upper ~= upper
+            or lower < 0 or upper > 5000 or lower > upper or lower % 100 ~= 0 or upper % 100 ~= 0 then
+        lower, upper = 2000, 5000
+    end
+    return (lower == upper and lower or math.random(lower, upper)) / 1000
+end
 local function continuation(command)
     local t = seconds()
     local d = DesktopMgr and DesktopMgr.Inst
@@ -110,7 +118,7 @@ local function continuation(command)
                 ..':'..tostring(ui.during_show_liujumanguan or false)
             local pending = A.continuation
             if not pending or pending.ui ~= ui or pending.key ~= key then
-                pending = {ui=ui, key=key, due=t + math.random(2000,5000)/1000}
+                pending = {ui=ui, key=key, due=t + delaySeconds(command)}
                 A.continuation = pending
             end
             A.resyncDue = nil
@@ -125,7 +133,7 @@ local function continuation(command)
     A.continuation = nil
     if command.control == 'mode' and command.resync and d.gameing
             and type(net._connectSuccess) == 'function' and t >= (A.nextResync or 0) then
-        A.resyncDue = A.resyncDue or (t + math.random(2000,5000)/1000)
+        A.resyncDue = A.resyncDue or (t + delaySeconds(command))
         if t >= A.resyncDue then
             A.resyncDue = nil; A.nextResync = t + 30; A.resyncing = true
             local ok = pcall(net._connectSuccess, net)

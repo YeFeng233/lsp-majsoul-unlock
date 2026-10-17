@@ -28,7 +28,9 @@ internal data class ImportedPolicy(
  * in app-private storage. Akagi supports 4/3 players; Mortal is experimental 4-player v4 only.
  */
 internal object OnnxModelStore {
-    private const val MAX_BYTES = 128L * 1024 * 1024
+    const val MAX_MODEL_MIB = 300
+    private const val MAX_BYTES = MAX_MODEL_MIB * 1024L * 1024
+    private const val MAX_UNCOMPRESSED_BYTES = MAX_BYTES * 2
     private const val PREFS = "onnx-policy-models"
     private val environment by lazy { OrtEnvironment.getEnvironment() }
     private val timeoutScheduler = Executors.newSingleThreadScheduledExecutor { task ->
@@ -169,7 +171,7 @@ internal object OnnxModelStore {
                         val count = source.read(buffer)
                         if (count < 0) break
                         bytes += count
-                        require(bytes <= MAX_BYTES) { "模型文件超过 128 MiB 限制" }
+                        require(bytes <= MAX_BYTES) { "模型文件超过 $MAX_MODEL_MIB MiB 限制" }
                         digest.update(buffer, 0, count)
                         output.write(buffer, 0, count)
                     }
@@ -247,7 +249,7 @@ internal object OnnxModelStore {
             for (entry in entries) {
                 require(entry.size in 0..MAX_BYTES) { "权重 ZIP 条目过大或长度未知" }
                 total += entry.size
-                require(total <= 256L*1024*1024) { "权重 ZIP 解压体积超过 256 MiB 限制" }
+                require(total <= MAX_UNCOMPRESSED_BYTES) { "权重 ZIP 解压体积超过 ${MAX_MODEL_MIB * 2} MiB 限制" }
                 if (entry.name.endsWith("data.pkl")) require(entry.size <= 4L*1024*1024) { "权重元数据过大" }
             }
         }
@@ -327,7 +329,7 @@ internal object OnnxModelStore {
         if (format == "mortal-pth" || file.name.endsWith(".pth", ignoreCase = true) || file.name.endsWith(".pt", ignoreCase = true)) {
             val rc = AiNative.loadMortalPth(players, file.absolutePath, false)
             check(rc == players) { "Mortal .pth 模型自检失败 (状态码: $rc)" }
-            return "${players}人 Mortal (.pth) 加载与推理自检通过（实验性，仅手动参考）· ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)} ms"
+            return "${players}人 Mortal (.pth) 加载与推理自检通过（实验性）· ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)} ms"
         }
         val cached = createValidatedCached(file, players)
         cached.session.use {

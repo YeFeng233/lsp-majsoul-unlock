@@ -23,6 +23,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +32,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,6 +44,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.roundToInt
 
 @Composable
 internal fun AiScreen(padding: PaddingValues) {
@@ -48,9 +52,10 @@ internal fun AiScreen(padding: PaddingValues) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var allowed by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var showLicense by remember { mutableStateOf(false) }
+    var autoDelay by remember { mutableStateOf(AutoDelaySettings.read(context)) }
     var fourModel by remember { mutableStateOf(OnnxModelStore.info(context, 4)) }
     var threeModel by remember { mutableStateOf(OnnxModelStore.info(context, 3)) }
-    var modelMessage by remember { mutableStateOf("支持 Akagi ONNX，以及实验性四麻 Mortal v4（ONNX/PTH/PT，128 MiB）。Mortal 仅供手动参考，不接入无人值守；三麻 Mortal 暂不开放。模型仅保存在本机。") }
+    var modelMessage by remember { mutableStateOf("支持 Akagi ONNX，以及实验性四麻 Mortal v4（ONNX/PTH/PT，单文件上限 ${OnnxModelStore.MAX_MODEL_MIB} MiB）。兼容的自定义模型可用于无人值守，仍需手动开启；三麻 Mortal 暂不开放。模型仅保存在本机。") }
     val scope = rememberCoroutineScope()
     val status by AiStatus.state.collectAsStateWithLifecycle()
     val autoStatus by AutoDiscardState.state.collectAsStateWithLifecycle()
@@ -108,12 +113,27 @@ internal fun AiScreen(padding: PaddingValues) {
                         onCheckedChange = { AiOverlayService.toggleAuto() })
                 }
                 Text(autoStatus.message)
-                Text("首次默认关闭；开启状态会保存。按 AI 首选操作，结算后继续下一局；断线或游戏退出后尝试恢复，取得完整牌局后继续。所有操作随机等待 2–5 秒。手动出牌或停止助手会关闭此模式。",
+                Text("操作延迟 ${autoDelay.label}", style = MaterialTheme.typography.bodyMedium)
+                Text("最小延迟 ${autoDelay.seconds(autoDelay.minTenths)} 秒", style = MaterialTheme.typography.bodySmall)
+                Slider(value = autoDelay.minTenths.toFloat(),
+                    onValueChange = { autoDelay = autoDelay.withMinimum(it.roundToInt()) },
+                    onValueChangeFinished = { AutoDelaySettings.save(context, autoDelay) },
+                    valueRange = 0f..50f, steps = 49,
+                    modifier = Modifier.semantics { contentDescription = "最小操作延迟" })
+                Text("最大延迟 ${autoDelay.seconds(autoDelay.maxTenths)} 秒", style = MaterialTheme.typography.bodySmall)
+                Slider(value = autoDelay.maxTenths.toFloat(),
+                    onValueChange = { autoDelay = autoDelay.withMaximum(it.roundToInt()) },
+                    onValueChangeFinished = { AutoDelaySettings.save(context, autoDelay) },
+                    valueRange = 0f..50f, steps = 49,
+                    modifier = Modifier.semantics { contentDescription = "最大操作延迟" })
+                Text("范围 0–5 秒，步进 0.1 秒；两端相同时为固定延迟。默认 2–5 秒，设置自动保存，下次操作生效，当前倒计时不变。出牌、立直、鸣牌、和牌、跳过和结算继续共用此设置。",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("首次默认关闭；开启状态会保存。按 AI 首选操作，结算后继续下一局；断线或游戏退出后尝试恢复，取得完整牌局后继续。所有操作按上方范围等待。手动出牌或停止助手会关闭此模式。",
                     style = MaterialTheme.typography.bodySmall)
                 Text("关闭模式后可正常退出游戏；收纳后点击“停”浮标会先关闭无人值守模式。整场结束后不会自动创建新对局。", style = MaterialTheme.typography.bodySmall)
             }
         }
-        Text("实验性 Mortal v4 仅支持四麻：特征含近似计算，暂不开放三麻 Mortal 或无人值守。", style = MaterialTheme.typography.bodySmall)
+        Text("实验性 Mortal v4 仅支持四麻，可手动开启无人值守；特征含近似计算，尚未完成与上游的完整一致性验证。", style = MaterialTheme.typography.bodySmall)
         Text("策略模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         PolicyModelCard(
             players = 4, model = fourModel, selectedCustom = OnnxModelStore.selectedCustom(context, 4),
