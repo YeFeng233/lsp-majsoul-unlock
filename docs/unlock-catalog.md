@@ -23,15 +23,21 @@ CI 会核对源 YAML、JSON、大小和校验值一致。只修改清单、源 Y
 
 ## GitHub 加速
 
-默认直连。在“更新 → GitHub 仓库加速”中启用开关，从“加速源”选择公共线路并保存。提供三个预设：
+默认直连。在“更新 → GitHub 仓库加速”中启用开关，从“加速源”选择公共线路并保存。提供五个预设：
 
 - [GH-Proxy](https://gh-proxy.com/docs/github-accelerator)：`https://gh-proxy.com/`
 - [LLKK](https://gh.llkk.cc/)：`https://gh.llkk.cc/`
 - [GHFast](https://ghfast.top/)：`https://ghfast.top/`
+- [GH-Proxy 备用域名](https://gh-proxy.com/docs/quick-start)：`https://gh-proxy.org/`（与 GH-Proxy 同服务的另一个访问域名）
+- [iSteed](https://cors.isteed.cc/)：`https://cors.isteed.cc/`
 
 上述地址在 2026-10-23 检查时均能返回本项目 JSON 清单；公共服务的网络可用性可能变化，可切换其他线路或直连。加速清单版本检查会带刷新参数，减少旧版本缓存造成的等待。
 
 “自定义地址（备选）”保留手动填写功能，切换公共线路不会清空已保存的自定义地址。填写 HTTPS 地址前缀并保存，例如前缀为 `https://accelerator.example/` 时，请求形式为 `https://accelerator.example/https://raw.githubusercontent.com/YeFeng233/lsp-majsoul-unlock/main/catalog/manifest.json`。此地址仅为格式示例。
+
+点击“测速并自动选择”，会测试所有预设及有效的自定义地址，以手机当前网络实际完成项目清单请求的耗时（毫秒）比较快慢。计时包括连接、HTTPS、下载及清单格式检查，显示的是文件请求耗时，不是 ICMP ping 或安装包下载速度。单条线路在测试时不使用直连回退，避免把回退后的直连误记为该线路的成绩。返回网页、过旧版本、同版本但校验值不一致或请求失败的线路不会参与选择。
+
+测试完成后自动启用并保存成功线路中耗时最低的一条，后续检查和下载使用该设置。若全部失败则保留原设置，自定义地址始终保留。界面显示每条线路的耗时或失败原因；切换页面或旋转不会重复发起测试。两次手动测试至少间隔 30 秒，最多同时请求 3 条线路，避免频繁请求公共服务。结果保留在本次应用进程中，选中的连接设置会持久保存。测速使用清单文件，部分公共线路可能限制 GitHub API，正式版本检查仍会按原逻辑回退直连。
 
 设置用于清单、GitHub Release 版本检查、更新元数据及安装包下载。应用内网络请求失败时会尝试原始直连地址；安装包交由浏览器下载，加速服务不可用时可关闭加速后重试。发布说明页面始终直接打开 GitHub。
 

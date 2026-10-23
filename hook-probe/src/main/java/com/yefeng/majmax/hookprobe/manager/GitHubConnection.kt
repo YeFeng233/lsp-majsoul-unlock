@@ -1,6 +1,7 @@
 package com.yefeng.majmax.hookprobe.manager
 
 import android.content.Context
+import android.os.SystemClock
 import com.yefeng.majmax.hookprobe.BuildConfig
 import com.yefeng.majmax.hookprobe.catalog.UnlockCatalogData
 import org.json.JSONArray
@@ -8,6 +9,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.io.ByteArrayOutputStream
 
 internal data class GitHubRoute(val accelerated: Boolean = false, val prefix: String = "") {
     fun urls(origin: String): List<String> {
@@ -34,6 +36,8 @@ internal object GitHubConnection {
         Preset("GH-Proxy · gh-proxy.com", "https://gh-proxy.com/"),
         Preset("LLKK · gh.llkk.cc", "https://gh.llkk.cc/"),
         Preset("GHFast · ghfast.top", "https://ghfast.top/"),
+        Preset("GH-Proxy 备用 · gh-proxy.org", "https://gh-proxy.org/"),
+        Preset("iSteed · cors.isteed.cc", "https://cors.isteed.cc/"),
     )
 
     fun customPrefix(context: Context): String {
@@ -102,18 +106,28 @@ internal object GitHubConnection {
         throw IllegalStateException("无法连接 GitHub 更新源，请检查网络或加速设置", failure)
     }
 
-    private fun read(url: String, accept: String, limit: Int, proxy: String?): String {
+    /** A speed probe uses only the nominated source, never the direct fallback. */
+    internal fun probeJson(url: String, proxy: String): String =
+        read(url, "application/json", UnlockCatalogData.MAX_MANIFEST_BYTES, proxy, SystemClock.elapsedRealtime() + 8_000)
+
+    private fun read(url: String, accept: String, limit: Int, proxy: String?, deadline: Long? = null): String {
+        fun remaining(): Int = if (deadline == null) 8_000 else
+            (deadline - SystemClock.elapsedRealtime()).also {
+                if (it <= 0) throw java.net.SocketTimeoutException("请求超时")
+            }.coerceAtMost(8_000).toInt()
         var next = url
         repeat(6) {
             require(allowedRedirect(next, proxy)) { "更新源跳转到不受支持的地址" }
             val connection = (URL(next).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 8_000; readTimeout = 8_000
+                connectTimeout = remaining(); readTimeout = remaining()
                 instanceFollowRedirects = false
+                if (deadline != null) useCaches = false
                 setRequestProperty("Accept", accept)
                 setRequestProperty("User-Agent", "MajsoulMax-Hook/${BuildConfig.VERSION_NAME}")
             }
             try {
                 val code = connection.responseCode
+                if (deadline != null) remaining()
                 if (code in listOf(301, 302, 303, 307, 308)) {
                     val location = connection.getHeaderField("Location") ?: error("更新源跳转地址为空")
                     next = URI(next).resolve(location).toASCIIString()
@@ -121,7 +135,22 @@ internal object GitHubConnection {
                     check(code in 200..299) { "更新源返回 HTTP $code" }
                     val length = connection.contentLengthLong
                     require(length <= limit) { "下载内容超过大小限制" }
-                    return connection.inputStream.use { UnlockCatalogData.utf8(UnlockCatalogData.readBounded(it, limit)) }
+                    return connection.inputStream.use { input ->
+                        if (deadline == null) UnlockCatalogData.utf8(UnlockCatalogData.readBounded(input, limit))
+                        else {
+                            val bytes = ByteArrayOutputStream()
+                            val buffer = ByteArray(4096)
+                            while (true) {
+                                connection.readTimeout = remaining()
+                                val count = input.read(buffer)
+                                remaining()
+                                if (count == -1) break
+                                require(bytes.size() + count <= limit) { "下载内容超过大小限制" }
+                                bytes.write(buffer, 0, count)
+                            }
+                            UnlockCatalogData.utf8(bytes.toByteArray())
+                        }
+                    }
                 }
             } finally { connection.disconnect() }
         }

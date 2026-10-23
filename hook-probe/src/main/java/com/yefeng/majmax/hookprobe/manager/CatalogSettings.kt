@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.text.DateFormat
 import java.util.Date
+import android.os.SystemClock
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun UnlockCatalogCard() {
@@ -55,6 +58,7 @@ internal fun UnlockCatalogCard() {
 @Composable
 internal fun GitHubConnectionCard() {
     val context = LocalContext.current
+    val speed by GitHubSpeedTests.state.collectAsStateWithLifecycle()
     var saved by remember { mutableStateOf(GitHubConnection.settings(context)) }
     var enabled by remember { mutableStateOf(saved.accelerated) }
     var source by remember { mutableStateOf(
@@ -65,16 +69,30 @@ internal fun GitHubConnectionCard() {
     var expanded by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
+    var clock by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(speed.cooldownUntil) {
+        clock = SystemClock.elapsedRealtime()
+        while (clock < speed.cooldownUntil) { delay(1_000); clock = SystemClock.elapsedRealtime() }
+    }
+    LaunchedEffect(speed.completedAt) {
+        if (speed.completedAt > 0 && speed.winner != null) {
+            saved = GitHubConnection.settings(context)
+            enabled = saved.accelerated
+            source = GitHubConnection.presets.firstOrNull { it.prefix == saved.prefix }?.prefix ?: ""
+            prefix = GitHubConnection.customPrefix(context)
+        }
+    }
+    val cooldownSeconds = ((speed.cooldownUntil - clock + 999) / 1_000).coerceAtLeast(0)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row {
                 Text("GitHub 仓库加速", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                Switch(checked = enabled, onCheckedChange = { enabled = it })
+                Switch(checked = enabled, onCheckedChange = { enabled = it }, enabled = !speed.testing)
             }
             Text(if (saved.accelerated) "已保存：${GitHubConnection.presets.firstOrNull { it.prefix == saved.prefix }?.name ?: "自定义加速地址"}" else "默认直接连接 GitHub")
             Text("加速源", style = MaterialTheme.typography.labelLarge)
             Box {
-                OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { expanded = true }, enabled = !speed.testing, modifier = Modifier.fillMaxWidth()) {
                     Text(GitHubConnection.presets.firstOrNull { it.prefix == source }?.name ?: "自定义地址（备选）")
                 }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -86,18 +104,35 @@ internal fun GitHubConnectionCard() {
             }
             if (source.isBlank()) {
                 OutlinedTextField(value = prefix, onValueChange = { prefix = it }, singleLine = true,
+                    enabled = !speed.testing,
                     label = { Text("加速站地址（HTTPS）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.fillMaxWidth())
                 Text("填写 HTTPS 地址前缀，应用会在后面追加完整 GitHub 链接。", style = MaterialTheme.typography.bodySmall)
             }
             Text("选择加速源并保存，用于清单、版本检查及安装包下载。公共加速服务由第三方提供，可按网络情况切换；应用内请求失败时会尝试直连。",
                 style = MaterialTheme.typography.bodySmall)
-            Button(onClick = {
+            Button(enabled = !speed.testing, onClick = {
                 runCatching { GitHubConnection.save(context, enabled, source.ifBlank { prefix }, prefix) }
                     .onSuccess { saved = GitHubConnection.settings(context); message = "连接设置已保存，下次检查和下载时使用"; error = false }
                     .onFailure { message = it.message ?: "地址无效"; error = true }
             }) { Text("保存连接设置") }
             if (message.isNotBlank()) Text(message, color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            Button(enabled = !speed.testing && cooldownSeconds == 0L, onClick = {
+                message = ""; error = false
+                GitHubSpeedTests.start(context, prefix)
+            }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (speed.testing) "正在测速…" else if (cooldownSeconds > 0) "${cooldownSeconds} 秒后可重新测速" else "测速并自动选择")
+            }
+            Text("测试所有预设和有效自定义地址的清单请求耗时，完成后自动启用并保存最快线路；全部失败保留原设置。两次测试至少间隔 30 秒。",
+                style = MaterialTheme.typography.bodySmall)
+            if (speed.message.isNotBlank()) Text(speed.message,
+                color = if (speed.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            if (speed.completedAt > 0) Text("上次测速：${DateFormat.getDateTimeInstance().format(Date(speed.completedAt))}",
+                style = MaterialTheme.typography.bodySmall)
+            speed.results.forEach { result ->
+                val value = result.latencyMs?.let { "$it ms" } ?: result.error ?: "测试中…"
+                Text("${result.source.name}：$value", style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }

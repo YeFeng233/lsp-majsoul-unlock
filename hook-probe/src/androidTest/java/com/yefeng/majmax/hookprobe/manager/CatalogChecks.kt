@@ -107,7 +107,7 @@ internal object CatalogChecks {
             GitHubConnection.save(isolated, true, "https://accelerator.example")
             check(GitHubConnection.settings(isolated).accelerated)
             check(GitHubConnection.customPrefix(isolated) == "https://accelerator.example/")
-            check(GitHubConnection.presets.size == 3 && GitHubConnection.presets.map { it.prefix }.distinct().size == 3)
+            check(GitHubConnection.presets.size == 5 && GitHubConnection.presets.map { it.prefix }.distinct().size == 5)
             for (preset in GitHubConnection.presets) {
                 check(GitHubRoute.validatePrefix(preset.prefix) == preset.prefix)
                 GitHubConnection.save(isolated, true, preset.prefix)
@@ -116,6 +116,42 @@ internal object CatalogChecks {
             }
             check(runCatching { GitHubConnection.save(isolated, true, "http://invalid.example/") }.isFailure)
             check(GitHubConnection.settings(isolated).prefix == GitHubConnection.presets.last().prefix)
+            val candidate = GitHubConnection.presets.first()
+            check(GitHubSpeedTests.candidates(candidate.prefix.trimEnd('/')).size == 5)
+            check(GitHubSpeedTests.candidates("http://invalid.example").size == 5)
+            check(GitHubSpeedTests.candidates("https://custom.example/path").last().prefix == "https://custom.example/path/")
+            var ticks = 0L
+            val measured = GitHubSpeedTests.measure(candidate, origin, bundled, clock = { ticks.also { ticks += 125 } }) { url, proxy ->
+                check(url == candidate.prefix + origin && proxy == candidate.prefix)
+                bundled.manifest
+            }
+            check(measured.latencyMs == 125L && measured.error == null)
+            val html = GitHubSpeedTests.measure(candidate, origin, bundled) { _, _ -> "<html>landing</html>" }
+            check(html.latencyMs == null && html.error != null)
+            val stale = JSONObject(bundled.manifest).put("version", bundled.version - 1).toString()
+            check(GitHubSpeedTests.measure(candidate, origin, bundled) { _, _ -> stale }.error != null)
+            val wrongHash = JSONObject(bundled.manifest).put("sha256", "0".repeat(64)).toString()
+            check(GitHubSpeedTests.measure(candidate, origin, bundled) { _, _ -> wrongHash }.error != null)
+            var attempts = 0
+            val timeout = GitHubSpeedTests.measure(candidate, origin, bundled) { _, _ ->
+                attempts++; throw java.net.SocketTimeoutException()
+            }
+            check(attempts == 1 && timeout.error == "请求超时") // Never times a direct fallback as a proxy.
+            val fast = measured.copy(source = GitHubConnection.presets[1], latencyMs = 42)
+            val results = listOf(timeout, measured, fast, html, measured.copy(latencyMs = -1))
+            check(GitHubSpeedTests.fastest(results) == fast)
+            check(GitHubSpeedTests.fastest(listOf(timeout, html, GitHubSpeedResult(candidate))) == null)
+            val customAddress = "https://custom.example/prefix/"
+            GitHubConnection.save(isolated, false, candidate.prefix, customAddress)
+            val beforeFailure = GitHubConnection.settings(isolated)
+            check(GitHubSpeedTests.selectFastest(isolated, listOf(timeout, html), customAddress) == null)
+            check(GitHubConnection.settings(isolated) == beforeFailure)
+            check(GitHubSpeedTests.selectFastest(isolated, results, customAddress) == fast)
+            check(GitHubConnection.settings(isolated) == GitHubRoute(true, fast.source.prefix))
+            check(GitHubConnection.customPrefix(isolated) == customAddress)
+            val customWinner = measured.copy(source = GitHubConnection.Preset("自定义地址", customAddress), latencyMs = 10)
+            check(GitHubSpeedTests.selectFastest(isolated, listOf(customWinner, fast), customAddress) == customWinner)
+            check(GitHubConnection.settings(isolated).prefix == customAddress)
             GitHubConnection.save(isolated, false, "bad address")
             check(!GitHubConnection.settings(isolated).accelerated)
             println("Unlock catalog cache, recovery, game installation and HTTPS route checks passed")
