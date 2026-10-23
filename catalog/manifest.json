@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "versionName": "2026.10.23.1",
+  "updatedAt": "2026-10-23",
+  "minModuleVersionCode": 25,
+  "dataFile": "unlock-data.json",
+  "size": 33910,
+  "sha256": "b9d2ed41de82d368a92dbce762939a072255b86604fec5ce1e43e54fe1ac6b4f"
+}

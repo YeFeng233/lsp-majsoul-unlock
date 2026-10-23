@@ -22,6 +22,17 @@ class AiEndpointProvider : ContentProvider() {
         if (Binder.getCallingUid() != gameUid) {
             throw SecurityException("Only the target game may request the local AI endpoint")
         }
+        if (method == "unlockCatalog") {
+            val snapshot = UnlockCatalogStore.repo(app).current()
+            return Bundle().apply {
+                putString("manifest", snapshot.manifest)
+                putByteArray("payload", snapshot.payload.toByteArray(Charsets.UTF_8))
+            }
+        }
+        if (method == "catalogApplied") {
+            CatalogUpdates.applied(app, extras?.getLong("version", 0) ?: 0, extras?.getString("sha256") ?: "")
+            return Bundle.EMPTY
+        }
         if (method == "hookDiagnostics") {
             val payload = extras?.getString("records") ?: throw IllegalArgumentException("Missing diagnostics batch")
             val ack = DiagnosticsStore.acceptHookBatch(app, payload)

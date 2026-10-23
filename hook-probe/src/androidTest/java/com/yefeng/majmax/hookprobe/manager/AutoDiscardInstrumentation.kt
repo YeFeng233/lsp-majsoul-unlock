@@ -251,17 +251,19 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 time=4_000; check(JSONObject(checkNotNull(gate.poll(null))).getLong("delayMs")==3_000L)
             }
             test("delay settings persist and recover invalid saved values") { _, _ ->
-                // Instrumentation package preferences only: never replace the user's settings.
-                val prefs=context.getSharedPreferences("unattended",0)
+                val isolated=object : android.content.ContextWrapper(targetContext) {
+                    override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences("delay-checks-$name",mode)
+                }
+                val prefs=isolated.getSharedPreferences("unattended",0)
                 try {
                     prefs.edit().clear().commit()
-                    check(AutoDelaySettings.read(context)==AutoDelayRange(20,50))
-                    AutoDelaySettings.save(context,AutoDelayRange(13,27))
-                    check(AutoDelaySettings.read(context)==AutoDelayRange(13,27))
+                    check(AutoDelaySettings.read(isolated)==AutoDelayRange(20,50))
+                    AutoDelaySettings.save(isolated,AutoDelayRange(13,27))
+                    check(AutoDelaySettings.read(isolated)==AutoDelayRange(13,27))
                     prefs.edit().putInt("delay_min_tenths",99).putInt("delay_max_tenths",-1).commit()
-                    check(AutoDelaySettings.read(context)==AutoDelayRange(0,50))
+                    check(AutoDelaySettings.read(isolated)==AutoDelayRange(0,50))
                     prefs.edit().putString("delay_min_tenths","bad").remove("delay_max_tenths").commit()
-                    check(AutoDelaySettings.read(context)==AutoDelayRange(20,50))
+                    check(AutoDelaySettings.read(isolated)==AutoDelayRange(20,50))
                 } finally { prefs.edit().clear().commit() }
             }
             test("round settlement resumes automatically with a new round") { gate, _ ->
@@ -333,6 +335,8 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 gate.poll(ack("","manual"))
                 check(!gate.isEnabled() && gate.poll(null)==null)
             }
+            CatalogChecks.run(targetContext, context)
+            sendStatus(0, Bundle().apply { putString("stream", "PASS unlock catalog update, recovery and GitHub routes\n") })
             if (!controllerOnly) ModelContractChecks.run(targetContext, context)
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)

@@ -82,8 +82,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 private val Green = Color(0xFF007A46)
 private val Cream = Color(0xFFF7F7EF)
@@ -93,6 +91,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         DiagnosticsAccess.grantToGame(this)
         DiagnosticsStore.cleanExpiredExports(this)
+        CatalogUpdates.check(applicationContext)
         setContent { HookManagerApp() }
     }
 }
@@ -111,7 +110,7 @@ private sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
     data object UpToDate : UpdateState
-    data class Available(val versionCode: Int, val versionName: String, val notes: String, val pageUrl: String) : UpdateState
+    data class Available(val versionCode: Int, val versionName: String, val notes: String, val pageUrl: String, val downloadUrl: String = "") : UpdateState
     data class Error(val message: String) : UpdateState
 }
 
@@ -134,6 +133,7 @@ private object ManagerDiagnostics {
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun HookManagerApp() {
+    val context = LocalContext.current
     var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     val destination = Destination.entries[selectedIndex]
@@ -146,7 +146,7 @@ private fun HookManagerApp() {
     LaunchedEffect(configured) {
         if (configured) {
             updateState = UpdateState.Checking
-            updateState = withContext(Dispatchers.IO) { checkForUpdate() }
+            updateState = withContext(Dispatchers.IO) { checkForUpdate(context) }
         }
     }
 
@@ -208,7 +208,7 @@ private fun HookManagerApp() {
                     onCheck = {
                         updateState = UpdateState.Checking
                         updateScope.launch {
-                            updateState = withContext(Dispatchers.IO) { checkForUpdate() }
+                            updateState = withContext(Dispatchers.IO) { checkForUpdate(context) }
                         }
                     },
                 )
@@ -510,6 +510,8 @@ private fun UpdatesScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("更新", style = MaterialTheme.typography.headlineSmall)
+        UnlockCatalogCard()
+        GitHubConnectionCard()
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -535,6 +537,12 @@ private fun UpdatesScreen(
                         is UpdateState.Available -> {
                             Text("发现新版本 ${state.versionName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                             if (state.notes.isNotBlank()) Text(state.notes.take(500), maxLines = 6)
+                            if (state.downloadUrl.isNotBlank()) Button(onClick = {
+                                runCatching {
+                                    val url = GitHubConnection.downloadUrl(context, state.downloadUrl)
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                                }
+                            }) { Text("下载安装包") }
                             TextButton(onClick = { openUrl(context, state.pageUrl) }) { Text("打开发布页面") }
                         }
                         is UpdateState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
@@ -559,7 +567,7 @@ private fun UpdateState.label(): String = when (this) {
     is UpdateState.Error -> "检查失败。"
 }
 
-private fun checkForUpdate(): UpdateState {
+private fun checkForUpdate(context: Context): UpdateState {
     val owner = BuildConfig.UPDATE_OWNER.trim()
     val repo = BuildConfig.UPDATE_REPO.trim()
     if (owner.isBlank() || repo.isBlank()) return UpdateState.NotConfigured
@@ -567,7 +575,7 @@ private fun checkForUpdate(): UpdateState {
     if (!validPart.matches(owner) || !validPart.matches(repo)) return UpdateState.Error("更新源配置无效。")
     val endpoint = "https://api.github.com/repos/$owner/$repo/releases?per_page=100"
     return runCatching {
-        val releases = requestText(endpoint, "application/vnd.github+json")
+        val releases = GitHubConnection.requestJson(context, endpoint, "application/vnd.github+json")
         val array = JSONArray(releases)
         var sawRelease = false
         var sawMetadata = false
@@ -587,18 +595,28 @@ private fun checkForUpdate(): UpdateState {
                     break
                 }
             }
-            val metadata = metadataUrl?.takeIf(::isAllowedGitHubUrl)
-                ?.let { requestText(it, "application/octet-stream") } ?: continue
+            val metadata = metadataUrl?.takeIf { isAllowedGitHubUrl(it) && it.startsWith("https://github.com/$owner/$repo/releases/download/") }
+                ?.let { GitHubConnection.requestJson(context, it, "application/octet-stream") } ?: continue
             sawMetadata = true
             val info = JSONObject(metadata)
             if (info.optString("applicationId") != BuildConfig.APPLICATION_ID) continue
             if (info.optString("channel", BuildConfig.UPDATE_CHANNEL) != BuildConfig.UPDATE_CHANNEL) continue
             if (info.optInt("versionCode", -1) <= BuildConfig.VERSION_CODE) continue
+            if (!release.optString("html_url").startsWith("https://github.com/$owner/$repo/releases/tag/")) continue
+            val primaryAbi = android.os.Build.SUPPORTED_ABIS.firstOrNull()
+            val variants = info.optJSONArray("variants") ?: JSONArray()
+            val names = (0 until variants.length()).mapNotNull { variants.optJSONObject(it) }
+                .filter { variant -> (0 until (variant.optJSONArray("abis")?.length() ?: 0)).any { variant.getJSONArray("abis").optString(it) == primaryAbi } }
+                .sortedBy { it.getJSONArray("abis").length() }.map { it.optString("assetName") }
+            val selectedName = names.firstOrNull() ?: info.optString("assetName")
+            val download = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
+                .firstOrNull { it.optString("name") == selectedName }?.optString("browser_download_url") ?: ""
             val candidate = UpdateState.Available(
                 versionCode = info.optInt("versionCode", -1),
                 versionName = info.optString("versionName", tag.removePrefix("v")),
                 notes = release.optString("body"),
                 pageUrl = release.optString("html_url"),
+                downloadUrl = download.takeIf { isAllowedGitHubUrl(it) && it.startsWith("https://github.com/$owner/$repo/releases/download/") } ?: "",
             )
             if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
         }
@@ -612,22 +630,6 @@ private fun checkForUpdate(): UpdateState {
     }
 }
 
-private fun requestText(url: String, accept: String): String {
-    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 10_000
-        readTimeout = 10_000
-        requestMethod = "GET"
-        setRequestProperty("Accept", accept)
-        setRequestProperty("User-Agent", "MajsoulMax-Hook/${BuildConfig.VERSION_NAME}")
-    }
-    return try {
-        if (connection.responseCode !in 200..299) error("更新源返回 HTTP ${connection.responseCode}")
-        connection.inputStream.bufferedReader().use { it.readText().take(2 * 1024 * 1024) }
-    } finally {
-        connection.disconnect()
-    }
-}
-
 private fun openUrl(context: Context, url: String) {
     if (!url.startsWith("https://github.com/")) return
     runCatching {
@@ -636,8 +638,7 @@ private fun openUrl(context: Context, url: String) {
 }
 
 private fun isAllowedGitHubUrl(value: String): Boolean {
-    val uri = android.net.Uri.parse(value)
-    return uri.scheme == "https" && (uri.host == "github.com" || uri.host?.endsWith(".githubusercontent.com") == true)
+    return GitHubConnection.isOrigin(value)
 }
 
 @Composable

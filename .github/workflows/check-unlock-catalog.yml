@@ -1,0 +1,23 @@
+name: Check unlock catalog
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'catalog/**'
+      - 'external/MajsoulMax-rs/liqi_config/max_data.yaml'
+      - 'tools/update_unlock_catalog.py'
+      - '.github/workflows/check-unlock-catalog.yml'
+  pull_request:
+    paths:
+      - 'catalog/**'
+      - 'external/MajsoulMax-rs/liqi_config/max_data.yaml'
+      - 'tools/update_unlock_catalog.py'
+      - '.github/workflows/check-unlock-catalog.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/update_unlock_catalog.py --check

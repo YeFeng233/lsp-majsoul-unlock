@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.json.JSONObject;
+import com.yefeng.majmax.hookprobe.catalog.UnlockCatalogData;
+import com.yefeng.majmax.hookprobe.catalog.UnlockCatalogInstaller;
 
 import io.github.libxposed.api.XposedModule;
 
@@ -29,9 +31,9 @@ public final class ProbeModule extends XposedModule {
     private static final String TAG = "MajsoulProbe";
     private static final Uri AI_ENDPOINT_URI = Uri.parse(
             "content://com.yefeng.majmax.hookprobe.ai/capture");
-    private static final String ASSET_VERSION = "0.10.0-delay1";
+    private static final String ASSET_VERSION = "0.11.0-catalog1";
     private static final String[] VERSIONED_ASSETS = {
-            "max_data.yaml", "ui/MajsoulMaxSettings.lua", "ui/MajsoulMaxAutoDiscard.lua"
+            "ui/MajsoulMaxSettings.lua", "ui/MajsoulMaxAutoDiscard.lua"
     };
     private static final String[] USER_ASSETS = {"settings.mod.json"};
     private static final AtomicBoolean CONFIGURED = new AtomicBoolean();
@@ -102,6 +104,7 @@ public final class ProbeModule extends XposedModule {
             if (!configDir.isDirectory() && !configDir.mkdirs()) {
                 throw new IOException("Cannot create " + configDir);
             }
+            UnlockCatalogData.Snapshot catalog = null;
             try (ZipFile moduleApk = new ZipFile(getModuleApplicationInfo().sourceDir)) {
                 File stamp = new File(configDir, ".asset-version");
                 String installed = stamp.isFile()
@@ -111,9 +114,16 @@ public final class ProbeModule extends XposedModule {
                     writeUtf8(stamp, ASSET_VERSION);
                 }
                 for (String name : USER_ASSETS) copyAsset(moduleApk, name, configDir, false);
+                // A UI asset upgrade must never replace a newer downloaded unlock list.
+                copyAsset(moduleApk, "max_data.yaml", configDir, false);
+                try { catalog = syncUnlockCatalog(gameContext, moduleApk, configDir); }
+                catch (Exception error) {
+                    HookDiagnostics.event("WARN", "hook.catalog", "CATALOG_UNAVAILABLE", new JSONObject());
+                }
             }
             int result = nativeConfigure(configDir.getAbsolutePath());
             if (result != 0) throw new IOException("nativeConfigure returned " + result);
+            if (catalog != null) reportCatalogApplied(gameContext, configDir, catalog);
             startAiEndpointDiscovery(gameContext.getApplicationContext());
             HookDiagnostics.event("INFO", "hook.entry", "CONFIGURED", new JSONObject());
             log(Log.INFO, TAG, "Rust Modder configured at " + configDir);
@@ -122,6 +132,48 @@ public final class ProbeModule extends XposedModule {
             HookDiagnostics.event("ERROR", "hook.entry", "CONFIG_FAILED", new JSONObject());
             log(Log.ERROR, TAG, "Cannot configure Rust Modder; traffic remains unmodified", error);
         }
+    }
+
+    private static UnlockCatalogData.Snapshot syncUnlockCatalog(Context context, ZipFile apk, File directory) throws Exception {
+        String manifest = catalogAsset(apk, "manifest.json", UnlockCatalogData.MAX_MANIFEST_BYTES);
+        String payload = catalogAsset(apk, "unlock-data.json", UnlockCatalogData.MAX_DATA_BYTES);
+        UnlockCatalogData.Snapshot chosen = UnlockCatalogData.parse(manifest, payload, BuildConfig.VERSION_CODE);
+        try {
+            Bundle reply = context.getContentResolver().call(AI_ENDPOINT_URI, "unlockCatalog", null, null);
+            if (reply != null) {
+                byte[] bytes = reply.getByteArray("payload");
+                if (bytes == null || bytes.length > UnlockCatalogData.MAX_DATA_BYTES) throw new IOException("Invalid catalog payload");
+                UnlockCatalogData.Snapshot downloaded = UnlockCatalogData.parse(
+                        reply.getString("manifest", ""), UnlockCatalogData.utf8(bytes), BuildConfig.VERSION_CODE);
+                if (downloaded.version > chosen.version || (downloaded.version == chosen.version && downloaded.sha256.equals(chosen.sha256))) {
+                    chosen = downloaded;
+                }
+            }
+        } catch (Exception ignored) {
+            // Embedded modules and an unavailable manager retain their last good data.
+        }
+        boolean installed = UnlockCatalogInstaller.install(directory, chosen);
+        HookDiagnostics.event("INFO", "hook.catalog", installed ? "CATALOG_INSTALLED" : "CATALOG_RETAINED",
+                HookDiagnostics.fields("count", chosen.skinCount, "reason", "version_" + chosen.version));
+        return chosen;
+    }
+
+    private static String catalogAsset(ZipFile apk, String name, int max) throws Exception {
+        ZipEntry entry = apk.getEntry("assets/unlock-catalog/" + name);
+        if (entry == null) throw new IOException("Missing bundled catalog");
+        try (InputStream input = apk.getInputStream(entry)) {
+            return UnlockCatalogData.utf8(UnlockCatalogData.readBounded(input, max));
+        }
+    }
+
+    private static void reportCatalogApplied(Context context, File directory, UnlockCatalogData.Snapshot catalog) {
+        try (InputStream input = new FileInputStream(new File(directory, "max_data.yaml"))) {
+            String hash = UnlockCatalogData.sha256(UnlockCatalogData.readBounded(input, UnlockCatalogData.MAX_DATA_BYTES));
+            if (!hash.equals(catalog.yamlSha256)) return;
+            Bundle report = new Bundle();
+            report.putLong("version", catalog.version); report.putString("sha256", hash);
+            context.getContentResolver().call(AI_ENDPOINT_URI, "catalogApplied", null, report);
+        } catch (Exception ignored) {}
     }
 
     private static void startAiEndpointDiscovery(Context gameContext) {

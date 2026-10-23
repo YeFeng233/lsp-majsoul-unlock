@@ -21,6 +21,10 @@ val stageUpstreamAssets by tasks.registering(Copy::class) {
         include("max_data.yaml", "settings.mod.json")
         into("liqi_config")
     }
+    from(rootProject.projectDir.resolve("../catalog")) {
+        include("manifest.json", "unlock-data.json")
+        into("unlock-catalog")
+    }
     from(rootProject.projectDir.resolve("../external/Akagi/LICENSE.txt")) {
         into("licenses")
         rename { "Akagi-LICENSE.txt" }
@@ -52,8 +56,8 @@ android {
         applicationId = "com.yefeng.majmax.hookprobe"
         minSdk = 29
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.10.0"
+        versionCode = 25
+        versionName = "0.11.0"
         testInstrumentationRunner = "com.yefeng.majmax.hookprobe.manager.AutoDiscardInstrumentation"
         buildConfigField("String", "UPDATE_OWNER", "\"${updateOwner.replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\"", "\\\"")}\"")

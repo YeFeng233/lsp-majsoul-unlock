@@ -13,6 +13,11 @@ on:
       - main
     tags:
       - 'v*'
+    paths-ignore:
+      - 'catalog/**'
+      - 'external/MajsoulMax-rs/liqi_config/max_data.yaml'
+      - 'tools/update_unlock_catalog.py'
+      - 'docs/unlock-catalog.md'
 
 permissions:
   contents: write
@@ -54,6 +59,9 @@ jobs:
 
       - name: Test automatic operation safeguards
         run: lua5.1 tools/tests/test_auto_discard.lua
+
+      - name: Verify versioned unlock catalog
+        run: python3 tools/update_unlock_catalog.py --check
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
