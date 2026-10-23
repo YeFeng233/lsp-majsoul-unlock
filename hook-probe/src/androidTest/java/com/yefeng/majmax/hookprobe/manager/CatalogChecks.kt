@@ -106,6 +106,16 @@ internal object CatalogChecks {
             check(GitHubConnection.allowedRedirect("https://release-assets.githubusercontent.com/file", null))
             GitHubConnection.save(isolated, true, "https://accelerator.example")
             check(GitHubConnection.settings(isolated).accelerated)
+            check(GitHubConnection.customPrefix(isolated) == "https://accelerator.example/")
+            check(GitHubConnection.presets.size == 3 && GitHubConnection.presets.map { it.prefix }.distinct().size == 3)
+            for (preset in GitHubConnection.presets) {
+                check(GitHubRoute.validatePrefix(preset.prefix) == preset.prefix)
+                GitHubConnection.save(isolated, true, preset.prefix)
+                check(GitHubConnection.settings(isolated).urls(origin) == listOf(preset.prefix + origin, origin))
+                check(GitHubConnection.customPrefix(isolated) == "https://accelerator.example/")
+            }
+            check(runCatching { GitHubConnection.save(isolated, true, "http://invalid.example/") }.isFailure)
+            check(GitHubConnection.settings(isolated).prefix == GitHubConnection.presets.last().prefix)
             GitHubConnection.save(isolated, false, "bad address")
             check(!GitHubConnection.settings(isolated).accelerated)
             println("Unlock catalog cache, recovery, game installation and HTTPS route checks passed")

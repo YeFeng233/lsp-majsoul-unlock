@@ -29,6 +29,18 @@ internal data class GitHubRoute(val accelerated: Boolean = false, val prefix: St
 
 internal object GitHubConnection {
     private const val PREFS = "github-connection"
+    data class Preset(val name: String, val prefix: String)
+    val presets = listOf(
+        Preset("GH-Proxy · gh-proxy.com", "https://gh-proxy.com/"),
+        Preset("LLKK · gh.llkk.cc", "https://gh.llkk.cc/"),
+        Preset("GHFast · ghfast.top", "https://ghfast.top/"),
+    )
+
+    fun customPrefix(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return prefs.getString("custom-prefix", null)
+            ?: settings(context).prefix.takeUnless { value -> presets.any { it.prefix == value } }.orEmpty()
+    }
     fun settings(context: Context): GitHubRoute {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val enabled = prefs.getBoolean("accelerated", false)
@@ -37,12 +49,15 @@ internal object GitHubConnection {
             else GitHubRoute(false, prefix)
     }
 
-    fun save(context: Context, enabled: Boolean, prefix: String) {
+    fun save(context: Context, enabled: Boolean, prefix: String, customPrefix: String? = null) {
         require(!enabled || prefix.isNotBlank()) { "请先填写加速地址" }
         val address = if (enabled) GitHubRoute.validatePrefix(prefix)
             else runCatching { GitHubRoute.validatePrefix(prefix) }.getOrDefault("")
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean("accelerated", enabled).putString("prefix", address).apply()
+        val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("accelerated", enabled).putString("prefix", address)
+        if (customPrefix != null) editor.putString("custom-prefix", customPrefix.trim())
+        else if (address.isNotBlank() && presets.none { it.prefix == address }) editor.putString("custom-prefix", address)
+        editor.apply()
     }
 
     fun isOrigin(value: String): Boolean = runCatching {

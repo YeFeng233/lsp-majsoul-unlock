@@ -1,6 +1,7 @@
 package com.yefeng.majmax.hookprobe.manager
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -8,8 +9,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,7 +57,12 @@ internal fun GitHubConnectionCard() {
     val context = LocalContext.current
     var saved by remember { mutableStateOf(GitHubConnection.settings(context)) }
     var enabled by remember { mutableStateOf(saved.accelerated) }
-    var prefix by remember { mutableStateOf(saved.prefix) }
+    var source by remember { mutableStateOf(
+        GitHubConnection.presets.firstOrNull { it.prefix == saved.prefix }?.prefix
+            ?: if (saved.prefix.isBlank()) GitHubConnection.presets.first().prefix else ""
+    ) }
+    var prefix by remember { mutableStateOf(GitHubConnection.customPrefix(context)) }
+    var expanded by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
@@ -62,14 +71,29 @@ internal fun GitHubConnectionCard() {
                 Text("GitHub 仓库加速", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                 Switch(checked = enabled, onCheckedChange = { enabled = it })
             }
-            Text(if (saved.accelerated) "已保存：使用自定义加速地址" else "默认直接连接 GitHub")
-            OutlinedTextField(value = prefix, onValueChange = { prefix = it }, singleLine = true,
-                label = { Text("加速站地址（HTTPS）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth())
-            Text("填写加速服务的地址前缀，应用会在后面追加完整 GitHub 链接。用于清单、版本检查及安装包下载；网络请求失败时会尝试直连。",
+            Text(if (saved.accelerated) "已保存：${GitHubConnection.presets.firstOrNull { it.prefix == saved.prefix }?.name ?: "自定义加速地址"}" else "默认直接连接 GitHub")
+            Text("加速源", style = MaterialTheme.typography.labelLarge)
+            Box {
+                OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(GitHubConnection.presets.firstOrNull { it.prefix == source }?.name ?: "自定义地址（备选）")
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    GitHubConnection.presets.forEach { preset ->
+                        DropdownMenuItem(text = { Text(preset.name) }, onClick = { source = preset.prefix; expanded = false })
+                    }
+                    DropdownMenuItem(text = { Text("自定义地址（备选）") }, onClick = { source = ""; expanded = false })
+                }
+            }
+            if (source.isBlank()) {
+                OutlinedTextField(value = prefix, onValueChange = { prefix = it }, singleLine = true,
+                    label = { Text("加速站地址（HTTPS）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth())
+                Text("填写 HTTPS 地址前缀，应用会在后面追加完整 GitHub 链接。", style = MaterialTheme.typography.bodySmall)
+            }
+            Text("选择加速源并保存，用于清单、版本检查及安装包下载。公共加速服务由第三方提供，可按网络情况切换；应用内请求失败时会尝试直连。",
                 style = MaterialTheme.typography.bodySmall)
             Button(onClick = {
-                runCatching { GitHubConnection.save(context, enabled, prefix) }
+                runCatching { GitHubConnection.save(context, enabled, source.ifBlank { prefix }, prefix) }
                     .onSuccess { saved = GitHubConnection.settings(context); message = "连接设置已保存，下次检查和下载时使用"; error = false }
                     .onFailure { message = it.message ?: "地址无效"; error = true }
             }) { Text("保存连接设置") }
