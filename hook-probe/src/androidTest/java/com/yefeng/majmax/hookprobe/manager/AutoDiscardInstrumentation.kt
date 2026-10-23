@@ -370,6 +370,10 @@ class AutoDiscardInstrumentation : Instrumentation() {
                 gate.poll(ack("","manual"))
                 check(!gate.isEnabled() && gate.poll(null)==null)
             }
+            DiagnosticsClearChecks.run(targetContext)
+            sendStatus(0, Bundle().apply { putString("stream", "PASS diagnostic cleanup scopes, rotations and legacy migration\n") })
+            ApkUpdateChecks.run(targetContext)
+            sendStatus(0, Bundle().apply { putString("stream", "PASS APK update identity, integrity, routing and cancellation checks\n") })
             CatalogChecks.run(targetContext, context)
             sendStatus(0, Bundle().apply { putString("stream", "PASS unlock catalog update, recovery and GitHub routes\n") })
             if (!controllerOnly) {

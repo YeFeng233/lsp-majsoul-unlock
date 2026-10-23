@@ -121,6 +121,10 @@ pub fn load_and_activate_pth(expected_players: u8, path: &str) -> i32 {
     load_pth(expected_players, path, true)
 }
 pub fn load_pth(expected_players: u8, path: &str, activate: bool) -> i32 {
+    if let Err(error) = validate_pth_archive(Path::new(path)) {
+        eprintln!("mortal: checkpoint archive rejected: {error}");
+        return -7;
+    }
     let model = match MortalPthModel::load_from_file(Path::new(path)) {
         Ok(m) => m,
         Err(error) => { eprintln!("mortal: checkpoint load failed: {error}"); return -2; },
@@ -163,6 +167,119 @@ probably bound to the wrong tensor."
         players as i32
     } else {
         -5
+    }
+}
+
+// Use the same ZIP/ZIP64 implementation as Candle, rather than Android's
+// java.util.zip.ZipFile, whose central-directory handling differs by OS version.
+// Inspect metadata before Candle allocates tensors or reads data.pkl.
+fn validate_pth_archive(path: &Path) -> anyhow::Result<()> {
+    let file = std::fs::File::open(path)?;
+    anyhow::ensure!(file.metadata()?.len() <= 300 * 1024 * 1024, "checkpoint exceeds 300 MiB");
+    validate_pth_zip(file)
+}
+
+fn validate_pth_zip(reader: impl std::io::Read + std::io::Seek) -> anyhow::Result<()> {
+    let mut archive = zip::ZipArchive::new(reader)?;
+    anyhow::ensure!(archive.len() <= 5000, "checkpoint exceeds 5000 entries");
+    let mut metadata_count = 0;
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let entry = archive.by_index_raw(index)?;
+        let size = entry.size();
+        anyhow::ensure!(size <= 300 * 1024 * 1024, "checkpoint entry exceeds 300 MiB");
+        total += size; // At most 5000 bounded entries; cannot overflow u64.
+        anyhow::ensure!(total <= 600 * 1024 * 1024, "checkpoint exceeds 600 MiB uncompressed");
+        if entry.name() == "data.pkl" || entry.name().ends_with("/data.pkl") {
+            metadata_count += 1;
+            anyhow::ensure!(size <= 4 * 1024 * 1024, "checkpoint metadata exceeds 4 MiB");
+        }
+    }
+    anyhow::ensure!(metadata_count == 1, "checkpoint must contain exactly one data.pkl");
+    Ok(())
+}
+
+#[cfg(test)]
+mod archive_checks {
+    use super::validate_pth_zip;
+    use std::io::{Cursor, Write};
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+    fn archive(names: &[&str], metadata_size: usize, zip64: bool) -> Vec<u8> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for name in names {
+            writer.start_file(*name, SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Stored).large_file(zip64)).unwrap();
+            writer.write_all(&vec![0; metadata_size]).unwrap();
+        }
+        let mut bytes = writer.finish().unwrap().into_inner();
+        if zip64 {
+            // Force ZIP64 end records even for a small fixture, as PyTorch does.
+            let end = bytes.len() - 22;
+            let count = u16::from_le_bytes(bytes[end+10..end+12].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(bytes[end+12..end+16].try_into().unwrap()) as u64;
+            let offset = u32::from_le_bytes(bytes[end+16..end+20].try_into().unwrap()) as u64;
+            let mut records = Vec::new();
+            records.extend_from_slice(&0x06064b50u32.to_le_bytes());
+            records.extend_from_slice(&44u64.to_le_bytes());
+            records.extend_from_slice(&45u16.to_le_bytes());
+            records.extend_from_slice(&45u16.to_le_bytes());
+            records.extend_from_slice(&[0; 8]);
+            for value in [count, count, size, offset] { records.extend_from_slice(&value.to_le_bytes()); }
+            records.extend_from_slice(&0x07064b50u32.to_le_bytes());
+            records.extend_from_slice(&0u32.to_le_bytes());
+            records.extend_from_slice(&(end as u64).to_le_bytes());
+            records.extend_from_slice(&1u32.to_le_bytes());
+            bytes[end+8..end+20].fill(0xff);
+            bytes.splice(end..end, records);
+        }
+        bytes
+    }
+
+    #[test]
+    fn accepts_stored_pytorch_zip_and_zip64() {
+        for zip64 in [false, true] {
+            validate_pth_zip(Cursor::new(archive(&["model/data.pkl", "model/data/0"], 8, zip64))).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_missing_or_duplicate_metadata() {
+        for names in [vec!["model/data/0"], vec!["a/data.pkl", "b/data.pkl"]] {
+            assert!(validate_pth_zip(Cursor::new(archive(&names, 0, false))).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_oversize_metadata_and_entry_count() {
+        assert!(validate_pth_zip(Cursor::new(archive(&["data.pkl"], 4*1024*1024+1, false))).is_err());
+        let names: Vec<String> = (0..5001).map(|i| format!("data/{i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert!(validate_pth_zip(Cursor::new(archive(&names, 0, false))).is_err());
+    }
+
+    #[test]
+    fn rejects_entry_and_total_size_limits_before_reading_data() {
+        for sizes in [[301u32, 0, 0], [300, 300, 1]] {
+            let mut bytes = archive(&["data.pkl", "data/0", "data/1", "data/2"], 0, false);
+            let positions: Vec<usize> = bytes.windows(4).enumerate()
+                .filter(|(_, b)| *b == b"PK\x01\x02").map(|(i, _)| i).collect();
+            for (position, size) in positions[1..].iter().zip(sizes) {
+                bytes[position+24..position+28].copy_from_slice(&(size*1024*1024).to_le_bytes());
+            }
+            assert!(validate_pth_zip(Cursor::new(bytes)).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_truncated_or_invalid_directory() {
+        let mut bytes = archive(&["data.pkl"], 0, true);
+        bytes.truncate(bytes.len()-30);
+        assert!(validate_pth_zip(Cursor::new(bytes)).is_err());
+        let mut bytes = archive(&["data.pkl"], 0, false);
+        let position = bytes.windows(4).position(|b| b == b"PK\x01\x02").unwrap();
+        bytes[position] = 0;
+        assert!(validate_pth_zip(Cursor::new(bytes)).is_err());
     }
 }
 

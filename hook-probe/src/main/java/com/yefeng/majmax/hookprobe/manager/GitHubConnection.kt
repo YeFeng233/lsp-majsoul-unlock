@@ -10,6 +10,8 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.io.ByteArrayOutputStream
+import java.io.File
+import kotlinx.coroutines.CancellationException
 
 internal data class GitHubRoute(val accelerated: Boolean = false, val prefix: String = "") {
     fun urls(origin: String): List<String> {
@@ -96,12 +98,13 @@ internal object GitHubConnection {
         }
     }
 
-    internal fun requestWithFallback(route: GitHubRoute, origin: String, read: (String, String?) -> String): String {
+    internal fun <T> requestWithFallback(route: GitHubRoute, origin: String, read: (String, String?) -> T): T {
         var failure: Exception? = null
         for (url in route.urls(origin)) {
             try {
                 return read(url, if (url == origin) null else route.prefix)
-            } catch (error: Exception) { failure = error }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { failure = error }
         }
         throw IllegalStateException("无法连接 GitHub 更新源，请检查网络或加速设置", failure)
     }
@@ -158,4 +161,58 @@ internal object GitHubConnection {
     }
 
     fun downloadUrl(context: Context, origin: String): String = settings(context).urls(origin).first()
+
+    /** Stream APK bytes through the same selected route and direct fallback as catalogs. */
+    fun downloadApk(context: Context, origin: String, target: File,
+        progress: (Long, Long) -> Unit, validate: (File) -> Unit) {
+        requestWithFallback(settings(context), origin) { url, proxy ->
+            // Each attempt replaces the partial file; bytes from different routes never mix.
+            target.delete()
+            streamApk(url, proxy, target, progress)
+            validate(target)
+        }
+    }
+
+    private fun streamApk(url: String, proxy: String?, target: File, progress: (Long, Long) -> Unit) {
+        val limit = 512L * 1024 * 1024
+        var next = url
+        repeat(6) {
+            progress(0, 0)
+            require(allowedRedirect(next, proxy)) { "安装包跳转到不受支持的地址" }
+            val connection = (URL(next).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000; readTimeout = 15_000
+                instanceFollowRedirects = false
+                setRequestProperty("Accept", "application/octet-stream")
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("User-Agent", "MajsoulMax-Hook/${BuildConfig.VERSION_NAME}")
+            }
+            try {
+                val code = connection.responseCode
+                if (code in listOf(301, 302, 303, 307, 308)) {
+                    next = URI(next).resolve(connection.getHeaderField("Location") ?: error("安装包跳转地址为空")).toASCIIString()
+                } else {
+                    check(code == 200) { "安装包下载返回 HTTP $code" }
+                    val total = connection.contentLengthLong
+                    require(total <= limit) { "安装包超过 512 MiB 限制" }
+                    var bytes = 0L
+                    connection.inputStream.use { input ->
+                        target.outputStream().buffered().use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                bytes += count
+                                require(bytes <= limit) { "安装包超过 512 MiB 限制" }
+                                progress(bytes, total.coerceAtLeast(0))
+                                output.write(buffer, 0, count)
+                            }
+                        }
+                    }
+                    check(bytes > 0 && (total < 0 || total == bytes)) { "安装包下载不完整，请重试" }
+                    return
+                }
+            } finally { connection.disconnect() }
+        }
+        error("安装包跳转次数过多")
+    }
 }

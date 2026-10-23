@@ -30,7 +30,6 @@ internal data class ImportedPolicy(
 internal object OnnxModelStore {
     const val MAX_MODEL_MIB = 300
     private const val MAX_BYTES = MAX_MODEL_MIB * 1024L * 1024
-    private const val MAX_UNCOMPRESSED_BYTES = MAX_BYTES * 2
     private const val PREFS = "onnx-policy-models"
     private val environment by lazy { OrtEnvironment.getEnvironment() }
     private val timeoutScheduler = Executors.newSingleThreadScheduledExecutor { task ->
@@ -141,21 +140,48 @@ internal object OnnxModelStore {
 
     fun import(context: Context, uri: Uri): ImportedPolicy {
         initialize(context)
-        val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            ?: uri.takeIf { it.scheme == "file" }?.lastPathSegment ?: "policy.onnx"
-        val lowerName = displayName.lowercase()
-        val isPthExt = lowerName.endsWith(".pth") || lowerName.endsWith(".pt")
-        val isOnnxExt = lowerName.endsWith(".onnx")
-        require(isPthExt || isOnnxExt) { "请选择 .onnx、.pth 或 .pt 模型文件" }
-
-        val parent = File(context.filesDir, "models/incoming/${UUID.randomUUID()}").apply { mkdirs() }
-        val staged = File(parent, if (isPthExt) "policy.pth" else "policy.onnx")
-        val digest = MessageDigest.getInstance("SHA-256")
+        val importId = UUID.randomUUID().toString()
+        val started = System.nanoTime()
+        var stage = "metadata"
         var bytes = 0L
+        var format = "unknown"
+        var nativeStatus: Int? = null
         var rejectionReason = "import_failed"
-        var treatAsPth = isPthExt
+        var parent: File? = null
+        fun log(code: String, level: String = "INFO", error: Throwable? = null, players: Int? = null) {
+            val fields = org.json.JSONObject().put("importId", importId).put("stage", stage)
+                .put("format", format).put("bytes", bytes)
+                .put("elapsedMs", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
+            nativeStatus?.let { fields.put("nativeStatus", it) }
+            players?.let { fields.put("count", it) }
+            if (error != null) {
+                fields.put("reason", rejectionReason).put("errorClass", error.javaClass.simpleName)
+                // Keep useful ZIP/ORT errors while excluding provider URIs and local paths.
+                val message = (error.message ?: "").replace(uri.toString(), "[source]")
+                    .replace(Regex("(?:[A-Za-z]:[\\\\/]|/)[^\\s()]+"), "[path]")
+                fields.put("errorMessage", message)
+            }
+            // Diagnostics must never turn a successful import into a failure.
+            runCatching { DiagnosticsStore.appendAssistant(context, level, "assistant.model", code, fields) }
+        }
+        log("MODEL_IMPORT_STARTED")
         try {
+            val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                ?: uri.takeIf { it.scheme == "file" }?.lastPathSegment ?: "policy.onnx"
+            val lowerName = displayName.lowercase()
+            val isPthExt = lowerName.endsWith(".pth") || lowerName.endsWith(".pt")
+            val isOnnxExt = lowerName.endsWith(".onnx")
+            stage = "extension"
+            format = if (isPthExt) "pth" else if (isOnnxExt) "onnx" else "unknown"
+            require(isPthExt || isOnnxExt) { "请选择 .onnx、.pth 或 .pt 模型文件" }
+
+            val incoming = File(context.filesDir, "models/incoming/$importId").apply { mkdirs() }
+            parent = incoming
+            val staged = File(incoming, if (isPthExt) "policy.pth" else "policy.onnx")
+            val digest = MessageDigest.getInstance("SHA-256")
+            var treatAsPth = isPthExt
+            stage = "read_source"
             val input = checkNotNull(context.contentResolver.openInputStream(uri)) { "无法读取所选文件" }
             input.buffered().use { source ->
                 source.mark(4)
@@ -165,6 +191,9 @@ internal object OnnxModelStore {
                     // PyTorch .pth checkpoints are ZIP archives containing data.pkl and data/* tensors.
                     treatAsPth = true
                 }
+                format = if (treatAsPth) "pth" else "onnx"
+                log("MODEL_IMPORT_FORMAT_DETECTED")
+                stage = "copy_source"
                 staged.outputStream().buffered().use { output ->
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
@@ -179,15 +208,26 @@ internal object OnnxModelStore {
             }
             require(bytes > 0) { "模型文件为空" }
             val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            log("MODEL_IMPORT_FILE_COPIED")
 
             if (treatAsPth) {
-                validatePthArchive(staged)
+                // The native ZIP reader validates archive limits before loading tensors.
+                // Android's java.util.zip.ZipFile rejects some PyTorch ZIP64 archives.
+                stage = "pth_archive_load_selftest"
+                log("MODEL_IMPORT_VALIDATION_STARTED")
                 val detectedPlayers = AiNative.loadMortalPth(0, staged.absolutePath, false)
+                nativeStatus = detectedPlayers
+                if (detectedPlayers == -7) {
+                    rejectionReason = "invalid_pth_archive"
+                    throw IllegalArgumentException("PyTorch 权重 ZIP 无效或超出限制（文件 300 MiB、解压 600 MiB、元数据 4 MiB、条目 5000）")
+                }
                 if (detectedPlayers != 4 && detectedPlayers != 3) {
                     rejectionReason = "invalid_mortal_pth_$detectedPlayers"
                     throw IllegalArgumentException("仅支持实验性四麻/三麻 Mortal v4；权重文件无效或结构不受支持 (状态码: $detectedPlayers)")
                 }
                 val players = detectedPlayers
+                log("MODEL_IMPORT_VALIDATED", players = players)
+                stage = "save_model"
                 val folder = File(File(context.filesDir, "models"), "$players-$hash").apply { mkdirs() }
                 val target = File(folder, "policy.pth")
                 val temp = File(folder, "policy.tmp")
@@ -201,14 +241,20 @@ internal object OnnxModelStore {
                     .putString("format_$players", "mortal-pth")
                     .putBoolean("enabled_$players", true)
                     .apply()
-                DiagnosticsStore.appendAssistant(context, "INFO", "assistant.model", "MODEL_IMPORTED",
-                    org.json.JSONObject().put("count", players).put("reason", "pth:${hash.take(12)}"))
+                stage = "complete"
+                log("MODEL_IMPORTED", players = players)
                 return ImportedPolicy(players, savedName, bytes, hash, "mortal-pth")
             }
 
+            stage = "onnx_external_weights"
+            log("MODEL_IMPORT_VALIDATION_STARTED")
             rejectExternalWeights(staged)
+            stage = "onnx_load_selftest"
             val spec = validateOnnx(staged)
             val players = spec.players
+            format = if (spec.contractKind == 1) "mortal-onnx" else "akagi-onnx"
+            log("MODEL_IMPORT_VALIDATED", players = players)
+            stage = "save_model"
             val folder = File(File(context.filesDir, "models"), "$players-$hash").apply { mkdirs() }
             val target = File(folder, "policy.onnx")
             val temp = File(folder, "policy.tmp")
@@ -228,29 +274,17 @@ internal object OnnxModelStore {
                 .putString("format_$players", formatTag)
                 .putBoolean("enabled_$players", true)
                 .apply()
-            DiagnosticsStore.appendAssistant(context, "INFO", "assistant.model", "MODEL_IMPORTED",
-                org.json.JSONObject().put("count", players).put("reason", "$formatTag:${hash.take(12)}"))
+            stage = "complete"
+            log("MODEL_IMPORTED", players = players)
             return ImportedPolicy(players, savedName, bytes, hash, formatTag)
         } catch (error: Throwable) {
-            DiagnosticsStore.appendAssistant(context, "ERROR", "assistant.model", "MODEL_IMPORT_REJECTED",
-                org.json.JSONObject().put("reason", rejectionReason))
+            if (rejectionReason == "import_failed") rejectionReason = "${stage}_failed"
+            log("MODEL_IMPORT_REJECTED", "ERROR", error)
             throw error
         } finally {
-            staged.delete()
-            parent.delete()
-        }
-    }
-
-    private fun validatePthArchive(file: File) {
-        java.util.zip.ZipFile(file).use { zip ->
-            val entries = zip.entries().asSequence().toList()
-            require(entries.size <= 5000 && entries.count { it.name.endsWith("/data.pkl") || it.name == "data.pkl" } == 1) { "不是受支持的 PyTorch 权重 ZIP" }
-            var total = 0L
-            for (entry in entries) {
-                require(entry.size in 0..MAX_BYTES) { "权重 ZIP 条目过大或长度未知" }
-                total += entry.size
-                require(total <= MAX_UNCOMPRESSED_BYTES) { "权重 ZIP 解压体积超过 ${MAX_MODEL_MIB * 2} MiB 限制" }
-                if (entry.name.endsWith("data.pkl")) require(entry.size <= 4L*1024*1024) { "权重元数据过大" }
+            parent?.let { incoming ->
+                incoming.listFiles()?.forEach { it.delete() }
+                incoming.delete()
             }
         }
     }

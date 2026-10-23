@@ -8,29 +8,25 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -88,56 +84,51 @@ internal fun AiScreen(padding: PaddingValues) {
         AiOverlayService.start(context, demo)
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
-    Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    ManagerPage(padding) {
         Text("本地牌局助手", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Text("实时推荐切牌，展示听牌后的和牌率估计与放铳风险。AI 和牌局分析均在手机内完成。",
             style = MaterialTheme.typography.bodyMedium)
-        Card {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (status.running) "助手已开启" else "助手未开启", style = MaterialTheme.typography.titleMedium)
-                Text(status.message)
-                Text(if (allowed) "悬浮窗权限已允许" else "首次使用需允许“显示在其他应用上层”", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = { start(false) }) { Text(if (allowed) "开启实时悬浮助手" else "允许悬浮窗权限") }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { start(true) }) { Text("本地模型自检") }
-                    TextButton(onClick = { AiOverlayService.stop(context) }, enabled = status.running) { Text("停止助手") }
-                }
-            }
+        ManagerCard {
+            Text(if (status.running) "助手已开启" else "助手未开启", style = MaterialTheme.typography.titleMedium)
+            Text(status.message)
+            Text(if (allowed) "悬浮窗权限已允许" else "首次使用需允许“显示在其他应用上层”", style = MaterialTheme.typography.bodySmall)
+            ManagerButton(onClick = { start(false) }) { Text(if (allowed) "开启实时悬浮助手" else "允许悬浮窗权限") }
+            ManagerActions(
+                first = { ManagerOutlinedButton(onClick = { start(true) }, modifier = it) { Text("本地模型自检") } },
+                second = { ManagerOutlinedButton(onClick = { AiOverlayService.stop(context) }, modifier = it,
+                    enabled = status.running) { Text("停止助手") } },
+            )
         }
-        Card {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("无人值守模式", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                    Switch(checked = autoStatus.enabled, enabled = status.running,
-                        onCheckedChange = { AiOverlayService.toggleAuto() })
-                }
-                Text(autoStatus.message)
-                Text("操作延迟 ${autoDelay.label}", style = MaterialTheme.typography.bodyMedium)
-                Text("最小延迟 ${autoDelay.seconds(autoDelay.minTenths)} 秒", style = MaterialTheme.typography.bodySmall)
-                Slider(value = autoDelay.minTenths.toFloat(),
-                    onValueChange = { autoDelay = autoDelay.withMinimum(it.roundToInt()) },
-                    onValueChangeFinished = { AutoDelaySettings.save(context, autoDelay) },
-                    valueRange = 0f..50f, steps = 49,
-                    modifier = Modifier.semantics { contentDescription = "最小操作延迟" })
-                Text("最大延迟 ${autoDelay.seconds(autoDelay.maxTenths)} 秒", style = MaterialTheme.typography.bodySmall)
-                Slider(value = autoDelay.maxTenths.toFloat(),
-                    onValueChange = { autoDelay = autoDelay.withMaximum(it.roundToInt()) },
-                    onValueChangeFinished = { AutoDelaySettings.save(context, autoDelay) },
-                    valueRange = 0f..50f, steps = 49,
-                    modifier = Modifier.semantics { contentDescription = "最大操作延迟" })
-                Text("范围 0–5 秒，步进 0.1 秒；两端相同时为固定延迟。默认 2–5 秒，设置自动保存，下次操作生效，当前倒计时不变。出牌、立直、鸣牌、和牌、跳过和结算继续共用此设置。",
-                    style = MaterialTheme.typography.bodySmall)
-                Text("首次默认关闭；开启状态会保存。按 AI 首选操作，结算后继续下一局；断线或游戏退出后尝试恢复，取得完整牌局后继续。所有操作按上方范围等待。手动出牌或停止助手会关闭此模式。",
-                    style = MaterialTheme.typography.bodySmall)
-                Text("关闭模式后可正常退出游戏；收纳后点击“停”浮标会先关闭无人值守模式。整场结束后不会自动创建新对局。", style = MaterialTheme.typography.bodySmall)
+        ManagerCard {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("无人值守模式", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                Switch(checked = autoStatus.enabled, enabled = status.running,
+                    onCheckedChange = { AiOverlayService.toggleAuto() })
             }
+            Text(autoStatus.message)
+            Text("操作延迟 ${autoDelay.label}", style = MaterialTheme.typography.bodyMedium)
+            Text("最小延迟 ${autoDelay.seconds(autoDelay.minTenths)} 秒", style = MaterialTheme.typography.bodySmall)
+            Slider(value = autoDelay.minTenths.toFloat(),
+                onValueChange = { autoDelay = autoDelay.withMinimum(it.roundToInt()) },
+                onValueChangeFinished = { AutoDelaySettings.save(context, autoDelay) },
+                valueRange = 0f..50f, steps = 49,
+                modifier = Modifier.semantics { contentDescription = "最小操作延迟" })
+            Text("最大延迟 ${autoDelay.seconds(autoDelay.maxTenths)} 秒", style = MaterialTheme.typography.bodySmall)
+            Slider(value = autoDelay.maxTenths.toFloat(),
+                onValueChange = { autoDelay = autoDelay.withMaximum(it.roundToInt()) },
+                onValueChangeFinished = { AutoDelaySettings.save(context, autoDelay) },
+                valueRange = 0f..50f, steps = 49,
+                modifier = Modifier.semantics { contentDescription = "最大操作延迟" })
+            Text("范围 0–5 秒，步进 0.1 秒；两端相同时为固定延迟。默认 2–5 秒，设置自动保存，下次操作生效，当前倒计时不变。出牌、立直、鸣牌、和牌、跳过和结算继续共用此设置。",
+                style = MaterialTheme.typography.bodySmall)
+            Text("首次默认关闭；开启状态会保存。按 AI 首选操作，结算后继续下一局；断线或游戏退出后尝试恢复，取得完整牌局后继续。所有操作按上方范围等待。手动出牌或停止助手会关闭此模式。",
+                style = MaterialTheme.typography.bodySmall)
+            Text("关闭模式后可正常退出游戏；收纳后点击“停”浮标会先关闭无人值守模式。整场结束后不会自动创建新对局。", style = MaterialTheme.typography.bodySmall)
         }
         Text("实验性 Mortal v4 支持四麻和三麻，可手动开启无人值守；特征含近似计算，尚未完成与上游的完整一致性验证。", style = MaterialTheme.typography.bodySmall)
         Text("策略模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         PolicyModelCard(
             players = 4, model = fourModel, selectedCustom = OnnxModelStore.selectedCustom(context, 4),
-            message = modelMessage,
             onImport = { modelPicker.launch(arrayOf("*/*")) },
             onBuiltIn = {
                 OnnxModelStore.selectBuiltIn(context, 4)
@@ -166,7 +157,6 @@ internal fun AiScreen(padding: PaddingValues) {
         )
         PolicyModelCard(
             players = 3, model = threeModel, selectedCustom = OnnxModelStore.selectedCustom(context, 3),
-            message = modelMessage,
             onImport = { modelPicker.launch(arrayOf("*/*")) },
             onBuiltIn = {
                 OnnxModelStore.selectBuiltIn(context, 3)
@@ -193,23 +183,20 @@ internal fun AiScreen(padding: PaddingValues) {
                 }
             },
         )
-        Card {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("悬浮窗操作", fontWeight = FontWeight.SemiBold)
-                Text("拖动标题栏移动窗口。点“调节”设置透明度和宽度，点“收纳”变成 AI 小浮标，点浮标再次展开。位置和显示设置会自动保存。")
-                Text("先开启助手，再进入雀魂对局。更新模块后请重启游戏；中途开启或丢失消息时，重新进入牌局以恢复完整状态。")
-                TextButton(onClick = {
-                    context.packageManager.getLaunchIntentForPackage(AiOverlayService.GAME)?.let(context::startActivity)
-                }) { Text("打开雀魂") }
-            }
+        Text(modelMessage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ManagerCard {
+            Text("悬浮窗操作", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("拖动标题栏移动窗口。点“调节”设置透明度和宽度，点“收纳”变成 AI 小浮标，点浮标再次展开。位置和显示设置会自动保存。")
+            Text("先开启助手，再进入雀魂对局。更新模块后请重启游戏；中途开启或丢失消息时，重新进入牌局以恢复完整状态。")
+            ManagerTextButton(onClick = {
+                context.packageManager.getLaunchIntentForPackage(AiOverlayService.GAME)?.let(context::startActivity)
+            }) { Text("打开雀魂") }
         }
-        Card {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("如何理解这些指标", fontWeight = FontWeight.SemiBold)
-                Text("和牌率仅在听牌时显示；未听牌时显示向听数和进张。放铳风险指数包含打点权重，越低越好，并非实际放铳概率。分析只使用己方手牌与公开牌面。")
-                Text("使用 Akagi 的本地轻量模型，支持普通四麻和三麻。自检使用内置样例，窗口会明确标记“非当前牌局”。")
-                TextButton(onClick = { showLicense = true }) { Text("助手开源许可") }
-            }
+        ManagerCard {
+            Text("如何理解这些指标", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("和牌率仅在听牌时显示；未听牌时显示向听数和进张。放铳风险指数包含打点权重，越低越好，并非实际放铳概率。分析只使用己方手牌与公开牌面。")
+            Text("使用 Akagi 的本地轻量模型，支持普通四麻和三麻。自检使用内置样例，窗口会明确标记“非当前牌局”。")
+            ManagerTextButton(onClick = { showLicense = true }) { Text("助手开源许可") }
         }
     }
     if (showLicense) {
@@ -229,31 +216,27 @@ private fun PolicyModelCard(
     players: Int,
     model: ImportedPolicy?,
     selectedCustom: Boolean,
-    message: String,
     onImport: () -> Unit,
     onBuiltIn: () -> Unit,
     onCustom: () -> Unit,
     onDelete: () -> Unit,
     onSelfTest: () -> Unit,
 ) {
-    Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(if (players == 4) "四麻模型" else "三麻模型", fontWeight = FontWeight.SemiBold)
-            Text("当前：${if (selectedCustom && model != null) model.format else "内置 Akagi"}")
-            if (model != null) {
-                Text("${model.name} · ${"%.1f".format(model.bytes / (1024f * 1024f))} MiB · SHA-256 ${model.sha256.take(12)}",
-                    style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(onClick = onCustom) { Text(if (selectedCustom) "已选自定义" else "使用自定义") }
-                    TextButton(onClick = onBuiltIn) { Text("切换内置") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = onSelfTest) { Text("模型自检") }
-                    TextButton(onClick = onDelete) { Text("删除") }
-                }
-            }
-            Button(onClick = onImport) { Text("导入 .onnx / .pth") }
-            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    ManagerCard {
+        Text(if (players == 4) "四麻模型" else "三麻模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("当前：${if (selectedCustom && model != null) model.format else "内置 Akagi"}")
+        if (model != null) {
+            Text("${model.name} · ${"%.1f".format(model.bytes / (1024f * 1024f))} MiB · SHA-256 ${model.sha256.take(12)}",
+                style = MaterialTheme.typography.bodySmall)
+            ManagerActions(
+                first = { ManagerOutlinedButton(onClick = onCustom, modifier = it) { Text(if (selectedCustom) "已选自定义" else "使用自定义") } },
+                second = { ManagerOutlinedButton(onClick = onBuiltIn, modifier = it) { Text("切换内置") } },
+            )
+            ManagerActions(
+                first = { ManagerOutlinedButton(onClick = onSelfTest, modifier = it) { Text("模型自检") } },
+                second = { ManagerOutlinedButton(onClick = onDelete, modifier = it) { Text("删除模型") } },
+            )
         }
+        ManagerButton(onClick = onImport) { Text("导入 .onnx / .pth") }
     }
 }

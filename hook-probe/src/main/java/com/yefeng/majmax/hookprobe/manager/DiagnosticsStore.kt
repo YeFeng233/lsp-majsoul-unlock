@@ -42,7 +42,8 @@ internal object DiagnosticsStore {
     )
     private val levels = setOf("DEBUG", "INFO", "WARN", "ERROR")
     private val components = setOf("hook.entry", "hook.native", "hook.capture", "assistant.service", "assistant.model", "assistant.engine", "assistant.autoplay", "manager")
-    private val allowedFieldNames = setOf("api", "moduleVersion", "count", "reason")
+    private val allowedFieldNames = setOf("api", "moduleVersion", "count", "reason",
+        "importId", "stage", "format", "bytes", "elapsedMs", "nativeStatus", "errorClass", "errorMessage")
 
     private fun directory(context: Context) = File(context.filesDir, "diagnostics")
     private fun logFile(context: Context, kind: DiagnosticKind, index: Int = 1) =
@@ -96,6 +97,20 @@ internal object DiagnosticsStore {
             }
         }
         return records.sortedWith(compareBy<DiagnosticRecord> { it.timeUtcMs }.thenBy { it.seq })
+    }
+
+    /** Clear only diagnostic JSONL files; serialize with reads, appends and rotation. */
+    @Synchronized
+    fun clear(context: Context, kind: DiagnosticKind? = null) {
+        // Complete migration first so a subsequent read cannot restore legacy logs.
+        migrateLegacy(context)
+        val kinds = kind?.let { listOf(it) } ?: DiagnosticKind.entries
+        for (selected in kinds) {
+            for (index in 1..FILE_COUNT) {
+                val file = logFile(context, selected, index)
+                check(!file.exists() || file.delete()) { "部分日志未能清理，请重试" }
+            }
+        }
     }
 
     fun packageZip(context: Context, rangeMs: Long?): File {
@@ -200,7 +215,8 @@ internal object DiagnosticsStore {
             if (!source.has(key)) continue
             when (val value = source.opt(key)) {
                 is Number -> put(key, value)
-                is String -> put(key, value.take(64).filter { it.isLetterOrDigit() || it in " _-./" })
+                is String -> put(key, value.take(if (key == "errorMessage") 240 else 64)
+                    .filter { it.isLetterOrDigit() || it in " _-./()：:" })
             }
         }
     }

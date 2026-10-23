@@ -8,16 +8,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,8 +39,6 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -58,14 +56,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -110,7 +108,8 @@ private sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
     data object UpToDate : UpdateState
-    data class Available(val versionCode: Int, val versionName: String, val notes: String, val pageUrl: String, val downloadUrl: String = "") : UpdateState
+    data class Available(val versionCode: Int, val versionName: String, val notes: String, val pageUrl: String,
+        val downloadUrl: String = "", val bytes: Long = 0, val sha256: String = "") : UpdateState
     data class Error(val message: String) : UpdateState
 }
 
@@ -228,21 +227,21 @@ private fun AboutDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("关于雀魂 Max Hook") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 InfoRow("应用", "雀魂 Max Hook")
                 InfoRow("版本", "${BuildConfig.VERSION_NAME} · ${BuildConfig.VERSION_CODE}")
                 InfoRow("发布通道", BuildConfig.UPDATE_CHANNEL)
                 InfoRow("构建提交", BuildConfig.BUILD_SHA)
                 InfoRow("包名", BuildConfig.APPLICATION_ID)
                 InfoRow("开发者", "YeFeng233")
-                TextButton(onClick = { openUrl(context, "https://github.com/YeFeng233/lsp-majsoul-unlock") }) {
+                ManagerOutlinedButton(onClick = { openUrl(context, "https://github.com/YeFeng233/lsp-majsoul-unlock") }) {
                     Text("项目地址 · GitHub")
                 }
-                TextButton(onClick = {
+                ManagerOutlinedButton(onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(ClipData.newPlainText("版本信息", versionText))
                 }) { Text("复制版本信息") }
-                TextButton(onClick = { showLicense = true }) { Text("开源许可") }
+                ManagerOutlinedButton(onClick = { showLicense = true }) { Text("开源许可") }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
@@ -266,28 +265,20 @@ private fun AboutDialog(onDismiss: () -> Unit) {
 private fun OverviewScreen(padding: PaddingValues) {
     val context = LocalContext.current
     var status by remember { mutableStateOf(readStatus(context)) }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(padding)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    ManagerPage(padding) {
+        Text("概览", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         StatusCard(status) { status = readStatus(context) }
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("当前安装", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                InfoRow("模块版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                InfoRow("目标游戏", "com.soulgamechst.majsoul")
-                InfoRow("更新通道", if (BuildConfig.UPDATE_OWNER.isBlank()) "尚未配置新仓库" else BuildConfig.UPDATE_CHANNEL)
-            }
+        ManagerCard {
+            Text("当前安装", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            InfoRow("模块版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow("目标游戏", "com.soulgamechst.majsoul")
+            InfoRow("更新通道", if (BuildConfig.UPDATE_OWNER.isBlank()) "尚未配置新仓库" else BuildConfig.UPDATE_CHANNEL)
         }
-        Card(
+        ManagerCard(
             onClick = { ManagerDiagnostics.append(context, "INFO", "ui", "MOD 设置仍由游戏内页面管理") },
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
         ) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -305,47 +296,48 @@ private fun StatusCard(status: ModuleStatus, onRefresh: () -> Unit) {
     val installed = runCatching {
         context.packageManager.getLaunchIntentForPackage("com.soulgamechst.majsoul") != null
     }.getOrDefault(false)
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (status.diagnosticAvailable) Icons.Default.CheckCircle else Icons.Default.Warning,
-                    contentDescription = null,
-                    tint = if (status.diagnosticAvailable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(28.dp),
+    ManagerCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (status.diagnosticAvailable) Icons.Default.CheckCircle else Icons.Default.Warning,
+                contentDescription = null,
+                tint = if (status.diagnosticAvailable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (status.diagnosticAvailable) "已有最近诊断记录" else "尚未读取游戏运行记录",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                 )
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(
-                        if (status.diagnosticAvailable) "已有最近诊断记录" else "尚未读取游戏运行记录",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        status.lastEvent ?: "启动游戏并在 LSPosed 中启用模块后可产生记录",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            HorizontalDivider()
-            InfoRow("目标游戏", if (installed) "已安装" else "未检测到")
-            InfoRow("日志来源", "Hook 事件通过游戏 UID 校验通道提交；不读取全局 logcat")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    ManagerDiagnostics.append(context, "INFO", "ui", "启动目标游戏")
-                    context.packageManager.getLaunchIntentForPackage("com.soulgamechst.majsoul")?.let { context.startActivity(it) }
-                }, enabled = installed) { Text("打开雀魂") }
-                TextButton(onClick = {
-                    ManagerDiagnostics.append(context, "INFO", "ui", "刷新诊断状态")
-                    onRefresh()
-                }) { Icon(Icons.Default.Refresh, contentDescription = null); Spacer(Modifier.width(4.dp)); Text("刷新诊断") }
+                Text(
+                    status.lastEvent ?: "启动游戏并在 LSPosed 中启用模块后可产生记录",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
+        HorizontalDivider()
+        InfoRow("目标游戏", if (installed) "已安装" else "未检测到")
+        InfoRow("日志来源", "Hook 事件通过游戏 UID 校验通道提交；不读取全局 logcat")
+        ManagerActions(first = { modifier ->
+            ManagerButton(modifier = modifier, onClick = {
+                ManagerDiagnostics.append(context, "INFO", "ui", "启动目标游戏")
+                context.packageManager.getLaunchIntentForPackage("com.soulgamechst.majsoul")?.let { context.startActivity(it) }
+            }, enabled = installed) { Text("打开雀魂") }
+        }, second = { modifier ->
+            ManagerOutlinedButton(modifier = modifier, onClick = {
+                ManagerDiagnostics.append(context, "INFO", "ui", "刷新诊断状态")
+                onRefresh()
+            }) { Icon(Icons.Default.Refresh, contentDescription = null); Spacer(Modifier.width(4.dp)); Text("刷新诊断") }
+        })
+
     }
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun LogsScreen(padding: PaddingValues) {
     val context = LocalContext.current
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -359,6 +351,11 @@ private fun LogsScreen(padding: PaddingValues) {
     val hookScroll = rememberLazyListState()
     val assistantScroll = rememberLazyListState()
     var showExport by remember { mutableStateOf(false) }
+    var showClear by remember { mutableStateOf(false) }
+    var clearAll by remember { mutableStateOf(false) }
+    var clearBusy by remember { mutableStateOf(false) }
+    var clearError by remember { mutableStateOf<String?>(null) }
+    val clearScope = rememberCoroutineScope()
     val lines = if (selectedTab == 0) hookLines else assistantLines
     val query = if (selectedTab == 0) hookQuery else assistantQuery
     val level = if (selectedTab == 0) hookLevel else assistantLevel
@@ -374,66 +371,66 @@ private fun LogsScreen(padding: PaddingValues) {
         hookLines = DiagnosticsStore.read(context, DiagnosticKind.Hook)
         assistantLines = ManagerDiagnostics.read(context)
     }
-    Column(Modifier.fillMaxSize().padding(padding)) {
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("日志", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                IconButton(onClick = ::refresh) { Icon(Icons.Default.Refresh, "刷新") }
-                IconButton(onClick = { showExport = true }) { Icon(Icons.Default.Share, "打包发送") }
-            }
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Hook 日志", "助手日志").forEachIndexed { index, label ->
-                    FilterChip(selected = selectedTab == index, onClick = { selectedTab = index }, label = { Text(label) })
+    ManagerContent(padding) {
+        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = ManagerLayout.pagePadding, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("日志", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        clearAll = false
+                        clearError = null
+                        showClear = true
+                    }, enabled = hookLines.isNotEmpty() || assistantLines.isNotEmpty()) { Text("清理日志") }
+                    IconButton(onClick = ::refresh) { Icon(Icons.Default.Refresh, "刷新") }
+                    IconButton(onClick = { showExport = true }) { Icon(Icons.Default.Share, "打包发送") }
                 }
-                FilterChip(selected = followLatest, onClick = { followLatest = !followLatest }, label = { Text("跟随最新") })
-            }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { if (selectedTab == 0) hookQuery = it else assistantQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text("搜索消息或事件") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("全部", "INFO", "WARN", "ERROR").forEach { level ->
-                    FilterChip(selected = level == (if (selectedTab == 0) hookLevel else assistantLevel),
-                        onClick = { if (selectedTab == 0) hookLevel = level else assistantLevel = level },
-                        label = { Text(level) })
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Hook 日志", "助手日志").forEachIndexed { index, label ->
+                        FilterChip(selected = selectedTab == index, onClick = { selectedTab = index }, label = { Text(label) })
+                    }
+                    FilterChip(selected = followLatest, onClick = { followLatest = !followLatest }, label = { Text("跟随最新") })
                 }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { if (selectedTab == 0) hookQuery = it else assistantQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("搜索消息或事件") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                )
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("全部", "INFO", "WARN", "ERROR").forEach { level ->
+                        FilterChip(selected = level == (if (selectedTab == 0) hookLevel else assistantLevel),
+                            onClick = { if (selectedTab == 0) hookLevel = level else assistantLevel = level },
+                            label = { Text(level) })
+                    }
+                }
+                Text(
+                    if (lines.isEmpty()) {
+                        if (selectedTab == 0) "尚未收到游戏 Hook 事件；请确认 LSPosed 已启用模块并重启游戏" else "助手尚未运行，或还没有产生诊断事件"
+                    } else "已载入 ${visible.size} / ${lines.size} 条",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                if (lines.isEmpty()) {
-                    if (selectedTab == 0) "尚未收到游戏 Hook 事件；请确认 LSPosed 已启用模块并重启游戏" else "助手尚未运行，或还没有产生诊断事件"
-                } else "已载入 ${visible.size} / ${lines.size} 条",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (visible.isEmpty()) {
-            EmptyState("暂无匹配日志", if (lines.isEmpty()) "可刷新页面，或在游戏/助手运行后再次查看。" else "调整搜索内容或级别筛选。")
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                state = activeScroll,
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(visible) { log ->
-                    var expanded by rememberSaveable(log.session, log.seq, log.code) { mutableStateOf(false) }
-                    Card(
-                        modifier = Modifier.clickable { expanded = !expanded },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (visible.isEmpty()) {
+                EmptyState("暂无匹配日志", if (lines.isEmpty()) "可刷新页面，或在游戏/助手运行后再次查看。" else "调整搜索内容或级别筛选。")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    state = activeScroll,
+                    contentPadding = PaddingValues(horizontal = ManagerLayout.pagePadding, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(ManagerLayout.contentGap),
+                ) {
+                    items(visible) { log ->
+                        var expanded by rememberSaveable(log.session, log.seq, log.code) { mutableStateOf(false) }
+                        ManagerCard(onClick = { expanded = !expanded }) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(log.displayTime, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.width(8.dp))
                                 Text(log.level, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.width(8.dp))
                                 Text(log.component, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                             }
-                            Spacer(Modifier.height(4.dp))
                             Text(log.summary)
                             if (expanded) {
                                 Text("事件：${log.code} · 会话：${log.session} · 序号：${log.seq}",
@@ -451,6 +448,50 @@ private fun LogsScreen(padding: PaddingValues) {
                 }
             }
         }
+    }
+    if (showClear) {
+        val currentKind = if (selectedTab == 0) DiagnosticKind.Hook else DiagnosticKind.Assistant
+        val currentLabel = if (selectedTab == 0) "Hook 日志" else "助手日志"
+        AlertDialog(
+            onDismissRequest = { if (!clearBusy) showClear = false },
+            title = { Text("清理日志") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FilterChip(selected = !clearAll, onClick = { clearAll = false }, enabled = !clearBusy,
+                        modifier = Modifier.fillMaxWidth(), label = { Text("当前分类：$currentLabel（${lines.size} 条）") })
+                    FilterChip(selected = clearAll, onClick = { clearAll = true }, enabled = !clearBusy,
+                        modifier = Modifier.fillMaxWidth(), label = { Text("全部日志（${hookLines.size + assistantLines.size} 条）") })
+                    Text("将删除所选范围的全部历史日志，包括被搜索或级别筛选隐藏的记录。清理后无法恢复，新日志仍会正常记录。")
+                    clearError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !clearBusy, onClick = {
+                    val kind = if (clearAll) null else currentKind
+                    clearBusy = true
+                    clearError = null
+                    clearScope.launch {
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                DiagnosticsStore.clear(context, kind)
+                                DiagnosticsStore.read(context, DiagnosticKind.Hook) to
+                                    DiagnosticsStore.read(context, DiagnosticKind.Assistant)
+                            }
+                        }.onSuccess { (hook, assistant) ->
+                            hookLines = hook
+                            assistantLines = assistant
+                            showClear = false
+                        }.onFailure {
+                            clearError = "清理失败，请重试。"
+                        }
+                        clearBusy = false
+                    }
+                }) { Text(if (clearBusy) "正在清理…" else "确认清理", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(enabled = !clearBusy, onClick = { showClear = false }) { Text("取消") }
+            },
+        )
     }
     if (showExport) {
         var range by remember { mutableIntStateOf(0) }
@@ -505,53 +546,44 @@ private fun UpdatesScreen(
 ) {
     val context = LocalContext.current
     val configured = BuildConfig.UPDATE_OWNER.isNotBlank() && BuildConfig.UPDATE_REPO.isNotBlank()
-    Column(
-        Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text("更新", style = MaterialTheme.typography.headlineSmall)
-        UnlockCatalogCard()
+    ManagerPage(padding) {
+        Text("更新", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         GitHubConnectionCard()
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Image(painterResource(R.drawable.app_icon), contentDescription = null, Modifier.size(52.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("雀魂 Max Hook", fontWeight = FontWeight.SemiBold)
-                        Text("${BuildConfig.VERSION_NAME} · ${BuildConfig.UPDATE_CHANNEL}", style = MaterialTheme.typography.bodySmall)
-                    }
+        UnlockCatalogCard()
+        ManagerCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(R.drawable.app_icon), contentDescription = null, Modifier.size(52.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("雀魂 Max Hook", fontWeight = FontWeight.SemiBold)
+                    Text("${BuildConfig.VERSION_NAME} · ${BuildConfig.UPDATE_CHANNEL}", style = MaterialTheme.typography.bodySmall)
                 }
-                HorizontalDivider()
-                if (configured) {
-                    Text(updateState.label(), color = MaterialTheme.colorScheme.primary)
-                    Button(
-                        enabled = updateState !is UpdateState.Checking,
-                        onClick = onCheck,
-                    ) {
-                        Icon(Icons.Default.SystemUpdate, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (updateState is UpdateState.Checking) "检查中…" else "检查更新")
-                    }
-                    when (val state = updateState) {
-                        is UpdateState.Available -> {
-                            Text("发现新版本 ${state.versionName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            if (state.notes.isNotBlank()) Text(state.notes.take(500), maxLines = 6)
-                            if (state.downloadUrl.isNotBlank()) Button(onClick = {
-                                runCatching {
-                                    val url = GitHubConnection.downloadUrl(context, state.downloadUrl)
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-                                }
-                            }) { Text("下载安装包") }
-                            TextButton(onClick = { openUrl(context, state.pageUrl) }) { Text("打开发布页面") }
-                        }
-                        is UpdateState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
-                        else -> Unit
-                    }
-                } else {
-                    Text("尚未配置新仓库", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("当前构建没有配置 GitHub Releases 更新源。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            HorizontalDivider()
+            if (configured) {
+                Text(updateState.label(), color = MaterialTheme.colorScheme.primary)
+                ManagerButton(
+                    enabled = updateState !is UpdateState.Checking,
+                    onClick = onCheck,
+                ) {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (updateState is UpdateState.Checking) "检查中…" else "检查更新")
                 }
+                when (val state = updateState) {
+                    is UpdateState.Available -> {
+                        Text("发现新版本 ${state.versionName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        if (state.notes.isNotBlank()) Text(state.notes.take(500), maxLines = 6)
+                        if (state.downloadUrl.isNotBlank()) ApkUpdateActions(
+                            ApkRelease(state.versionCode, state.downloadUrl, state.bytes, state.sha256))
+                        ManagerOutlinedButton(onClick = { openUrl(context, state.pageUrl) }) { Text("打开发布页面") }
+                    }
+                    is UpdateState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
+                    else -> Unit
+                }
+            } else {
+                Text("尚未配置新仓库", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("当前构建没有配置 GitHub Releases 更新源。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Text("安装新模块后需重启游戏，才能载入新的 Hook 版本。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -609,14 +641,18 @@ private fun checkForUpdate(context: Context): UpdateState {
                 .filter { variant -> (0 until (variant.optJSONArray("abis")?.length() ?: 0)).any { variant.getJSONArray("abis").optString(it) == primaryAbi } }
                 .sortedBy { it.getJSONArray("abis").length() }.map { it.optString("assetName") }
             val selectedName = names.firstOrNull() ?: info.optString("assetName")
-            val download = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
-                .firstOrNull { it.optString("name") == selectedName }?.optString("browser_download_url") ?: ""
+            val asset = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
+                .firstOrNull { it.optString("name") == selectedName }
+            val download = asset?.optString("browser_download_url").orEmpty()
             val candidate = UpdateState.Available(
                 versionCode = info.optInt("versionCode", -1),
                 versionName = info.optString("versionName", tag.removePrefix("v")),
                 notes = release.optString("body"),
                 pageUrl = release.optString("html_url"),
                 downloadUrl = download.takeIf { isAllowedGitHubUrl(it) && it.startsWith("https://github.com/$owner/$repo/releases/download/") } ?: "",
+                bytes = asset?.optLong("size", 0)?.coerceAtLeast(0) ?: 0,
+                sha256 = asset?.optString("digest")?.removePrefix("sha256:")
+                    ?.takeIf { it.matches(Regex("[a-fA-F0-9]{64}")) }.orEmpty(),
             )
             if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
         }
@@ -654,9 +690,9 @@ private fun EmptyState(title: String, message: String) {
 
 @Composable
 private fun InfoRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        Text(value, fontWeight = FontWeight.Medium)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
     }
 }
 

@@ -641,6 +641,7 @@ dependencies = [
  "safetensors 0.6.2",
  "serde",
  "serde_json",
+ "zip",
 ]
 
 [[package]]

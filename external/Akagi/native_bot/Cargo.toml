@@ -18,7 +18,7 @@ required-features = ["extract"]
 # `infer` pulls in candle + safetensors for the neural-net inference path.
 # The obs/action codec do NOT need it, so keep it optional for a lean build.
 default = ["infer"]
-infer = ["dep:candle-core", "dep:candle-nn", "dep:safetensors", "dep:mortal-sp"]
+infer = ["dep:candle-core", "dep:candle-nn", "dep:safetensors", "dep:mortal-sp", "dep:zip"]
 # `extract` gates the offline training-data extractor binary (flate2 + rayon).
 extract = ["dep:rayon"]
 
@@ -31,6 +31,7 @@ flate2 = "1"
 rayon = { version = "1", optional = true }
 candle-core = { version = "0.9", optional = true }
 candle-nn = { version = "0.9", optional = true }
+zip = { version = "7.2", default-features = false, optional = true }
 safetensors = { version = "0.6", optional = true }
 mortal-sp = { path = "../../mortal-sp", optional = true }
 

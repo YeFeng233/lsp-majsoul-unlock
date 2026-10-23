@@ -24,6 +24,31 @@ internal object ModelContractChecks {
             }
             fun import(name: String) = OnnxModelStore.import(target,Uri.fromFile(model(name)))
             check(import("akagi-renamed.onnx").format == "akagi-onnx")
+            val importedLog = DiagnosticsStore.read(target, DiagnosticKind.Assistant).last { it.code == "MODEL_IMPORTED" }
+            val importId = importedLog.fields.getString("importId")
+            val importLogs = DiagnosticsStore.read(target, DiagnosticKind.Assistant)
+                .filter { it.fields.optString("importId") == importId }
+            check(importLogs.first().code == "MODEL_IMPORT_STARTED")
+            check(importLogs.any { it.code == "MODEL_IMPORT_FILE_COPIED" && it.fields.getLong("bytes") > 0 })
+            check(importLogs.any { it.code == "MODEL_IMPORT_VALIDATED" })
+            check(importedLog.fields.getString("stage") == "complete")
+            check(importedLog.fields.getLong("elapsedMs") >= 0)
+            // Failures before file copying must also appear in the exported diagnostics.
+            val unsupported = File(folder, "unsupported.txt").apply { writeText("invalid") }
+            check(runCatching { OnnxModelStore.import(target, Uri.fromFile(unsupported)) }.isFailure)
+            val rejected = DiagnosticsStore.read(target, DiagnosticKind.Assistant).last { it.code == "MODEL_IMPORT_REJECTED" }
+            check(rejected.fields.getString("stage") == "extension")
+            check(rejected.fields.getString("errorClass") == "IllegalArgumentException")
+            val brokenPth = File(folder, "broken.pth").apply { writeText("invalid zip") }
+            check(runCatching { OnnxModelStore.import(target, Uri.fromFile(brokenPth)) }.isFailure)
+            val archiveFailure = DiagnosticsStore.read(target, DiagnosticKind.Assistant).last { it.code == "MODEL_IMPORT_REJECTED" }
+            check(archiveFailure.fields.getInt("nativeStatus") == -7)
+            check(archiveFailure.fields.getString("reason") == "invalid_pth_archive")
+            java.util.zip.ZipFile(DiagnosticsStore.packageZip(target, null)).use { zip ->
+                val exported = zip.getInputStream(zip.getEntry("assistant.jsonl")).bufferedReader().use { it.readText() }
+                check(exported.contains(importId) && exported.contains("invalid_pth_archive"))
+                check(!exported.contains(folder.absolutePath))
+            }
             check(runCatching { import("akagi-no-contract.onnx") }.isFailure)
             check(import("mortal-sanma.onnx").players == 3)
             check(runCatching { import("mortal-sanma-wrong-actions.onnx") }.isFailure)
