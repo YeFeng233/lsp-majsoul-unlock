@@ -20,6 +20,18 @@ use std::borrow::Cow;
 
 use riichienv_core::replay::MjaiEvent;
 
+/// Preserve the replay events that the sanma dependency's ingestion method
+/// does not log itself. Mortal needs discard provenance and reach acceptance.
+pub fn apply_sanma_event(state: &mut riichienv_core::state_3p::GameState3P, event: MjaiEvent) {
+    if matches!(event, MjaiEvent::StartGame { .. } | MjaiEvent::StartKyoku { .. }) {
+        state.mjai_log.clear();
+    }
+    let line = serde_json::to_string(&event).expect("serializable mjai event");
+    let before = state.mjai_log.len();
+    state.apply_mjai_event(event);
+    if state.mjai_log.len() == before { state.mjai_log.push(line); }
+}
+
 /// Tenhou sanma logs spell nukidora `nukidora`; riichienv's `MjaiEvent` only
 /// knows `kita`. Rename before parsing, or serde folds the event into
 /// `MjaiEvent::Other` and it is silently lost.

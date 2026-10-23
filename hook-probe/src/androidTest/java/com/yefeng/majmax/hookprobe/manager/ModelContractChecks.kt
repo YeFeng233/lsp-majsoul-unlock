@@ -45,10 +45,10 @@ internal object ModelContractChecks {
                 check(policy.players == 3 && policy.format == "mortal-onnx")
                 OnnxModelStore.prepareSelected(target)
                 val input = FloatArray(775*34+44)
-                input[775*34+35] = 1f; input[775*34+38] = 1f
+                input[775*34+35] = 1f; input[775*34+40] = 1f
                 val result = checkNotNull(OnnxModelStore.infer(3,input))
-                check(result.size == 44 && result[35] == 35f && result[38] == 38f)
-                check(result.indices.filter { it != 35 && it != 38 }.all { result[it] == 0f })
+                check(result.size == 44 && result[35] == 35f && result[40] == 40f)
+                check(result.indices.filter { it != 35 && it != 40 }.all { result[it] == 0f })
                 check(OnnxModelStore.infer(3,FloatArray(775*34)) == null)
             }
             OnnxModelStore.selectBuiltIn(target,4)

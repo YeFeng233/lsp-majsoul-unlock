@@ -1,8 +1,8 @@
 //! Mortal observation encoding from a live [`GameState`].
 //!
-//! This is a faithful port of `libriichi/src/state/obs_repr.rs`
-//! (`ObsEncoderContext::encode_obs` and friends) from Equim-chan/Mortal. The
-//! channel map and its verification live in `tools/MORTAL_OBS_PARITY.md`.
+//! This is a partial port of `libriichi/src/state/obs_repr.rs` from
+//! Equim-chan/Mortal and Akagi's 775-channel sanma contract. It has not passed
+//! complete upstream observation parity; see docs/mortal-sanma-quality.md.
 //!
 //! Why this module exists alongside [`crate::obs::encode`]: that encoder feeds
 //! Akagi's *own* compact feature format (`channels(num_players)` planes), which
@@ -59,7 +59,7 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// The 4-player layout, verified bit-exact against Equim-chan/Mortal.
+    /// The 4-player channel layout; matching geometry does not establish value parity.
     pub const V4: Layout = Layout {
         channels: CHANNELS_V4,
         num_players: 4,
@@ -306,9 +306,9 @@ pub fn encode_mortal_obs_with(view: &MortalSeatView, layout: Layout) -> Vec<f32>
     p.advance(3);
     // -- score, two planes per player -----------------------------------
     for &score in view.scores.iter().take(np) {
-        p.fill(p.idx, (score.clamp(0, 100_000) as f32) / layout.score_div[0]);
+        p.fill(p.idx, (score.clamp(0, layout.score_div[0] as i32) as f32) / layout.score_div[0]);
         p.advance(1);
-        p.fill(p.idx, (score.clamp(0, 30_000) as f32) / layout.score_div[1]);
+        p.fill(p.idx, (score.clamp(0, layout.score_div[1] as i32) as f32) / layout.score_div[1]);
         p.advance(1);
     }
     // -- rank / kyoku one-hot --------------------------------------------
@@ -530,9 +530,8 @@ pub fn encode_mortal_obs_with(view: &MortalSeatView, layout: Layout) -> Vec<f32>
         p.fill(p.idx, 1.0);
     }
     p.advance(1);
-    // 4-player: chi low / mid / high. 3-player: a single nukidora channel.
-    // libriichi3p does not keep the two chi slots as padding, which is one of
-    // the differences that makes its width 775 rather than 780.
+    // 4-player: chi low/mid/high, pon, daiminkan.
+    // Akagi's 775-channel sanma: pon, daiminkan, nukidora (in that order).
     if layout.call_block_channels == 3 {
         if view.can_chi_low {
             p.fill(p.idx, 1.0);
@@ -543,18 +542,14 @@ pub fn encode_mortal_obs_with(view: &MortalSeatView, layout: Layout) -> Vec<f32>
         if view.can_chi_high {
             p.fill(p.idx + 2, 1.0);
         }
-    } else if view.can_nukidora {
-        p.fill(p.idx, 1.0);
+        if view.can_pon { p.fill(p.idx + 3, 1.0); }
+        if view.can_daiminkan { p.fill(p.idx + 4, 1.0); }
+    } else {
+        if view.can_pon { p.fill(p.idx, 1.0); }
+        if view.can_daiminkan { p.fill(p.idx + 1, 1.0); }
+        if view.can_nukidora { p.fill(p.idx + 2, 1.0); }
     }
-    p.advance(layout.call_block_channels);
-    if view.can_pon {
-        p.fill(p.idx, 1.0);
-    }
-    p.advance(1);
-    if view.can_daiminkan {
-        p.fill(p.idx, 1.0);
-    }
-    p.advance(1);
+    p.advance(layout.call_block_channels + 2);
     if view.can_ankan {
         for &t in view.ankan_candidates.iter() {
             p.assign(p.idx, deaka(t), 1.0);
@@ -576,8 +571,8 @@ pub fn encode_mortal_obs_with(view: &MortalSeatView, layout: Layout) -> Vec<f32>
     }
     p.advance(1);
     // -- v4 single-player-table tail -------------------------------------------------------
-    p.fill(p.idx, (view.max_ev.clamp(0.0, 100_000.0)) / layout.score_div[0]);
-    p.fill(p.idx + 1, (view.max_ev.clamp(0.0, 30_000.0)) / layout.score_div[1]);
+    p.fill(p.idx, (view.max_ev.clamp(0.0, layout.score_div[0])) / layout.score_div[0]);
+    p.fill(p.idx + 1, (view.max_ev.clamp(0.0, layout.score_div[1])) / layout.score_div[1]);
     p.advance(2);
 
     if view.can_discard {

@@ -196,7 +196,7 @@ impl Engine {
             Backend::Three { state, .. } => {
                 let mut ev = ev;
                 sanitize_3p(&mut ev);
-                state.apply_mjai_event(ev);
+                crate::mjai_compat::apply_sanma_event(state, ev);
                 if let Some((actor, pai)) = opponent_kakan {
                     crate::chankan::open_on_kakan_3p(state, actor, &pai, self.seat);
                 }

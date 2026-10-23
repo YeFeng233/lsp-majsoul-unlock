@@ -117,6 +117,21 @@ fn tiles_seen_3p(state: &GameState3P, seat: u8, dora_indicators: &[u8]) -> [u8; 
                 seen[i] = seen[i].saturating_add(1);
             }
         }
+        for &t in &player.kita_tiles {
+            seen[mortal_obs_deaka(t)] = seen[mortal_obs_deaka(t)].saturating_add(1);
+        }
+    }
+    // The replay dependency keeps the called discard in its original pond.
+    // Count that physical tile once, even though it also appears in the meld.
+    for player in &state.players {
+        for meld in &player.melds {
+            if meld.opened {
+                if let Some(tile) = meld.called_tile {
+                    let t = mortal_obs_deaka(tile);
+                    seen[t] = seen[t].saturating_sub(1);
+                }
+            }
+        }
     }
     for &t in dora_indicators {
         let i = mortal_obs_deaka(t);
@@ -129,7 +144,7 @@ fn tiles_seen_3p(state: &GameState3P, seat: u8, dora_indicators: &[u8]) -> [u8; 
 ///
 /// A tile counts once per indicator that makes it a dora, and red fives always
 /// count.
-fn doras_owned_3p(state: &GameState3P, dora_indicators: &[u8]) -> [u8; 4] {
+fn doras_owned_3p(state: &GameState3P, seat: u8, dora_indicators: &[u8]) -> [u8; 4] {
     let mut owned = [0u8; 4];
     let dora34: Vec<usize> = dora_indicators
         .iter()
@@ -149,8 +164,8 @@ fn doras_owned_3p(state: &GameState3P, dora_indicators: &[u8]) -> [u8; 4] {
                 count = count.saturating_add(1);
             }
         };
-        for &t in &player.hand {
-            tally(t);
+        if pid == seat as usize {
+            for &t in &player.hand { tally(t); }
         }
         for m in &player.melds {
             for &t in &m.tiles {
@@ -220,7 +235,12 @@ impl MortalSeatView {
             v.ankan_overview[r] = ankan.into_iter().flatten().collect();
 
             v.scores[r] = player.score;
-            v.riichi_declared[r] = player.riichi_declared;
+            v.riichi_declared[r] = player.riichi_declared || player.riichi_stage;
+            // Replay distinguishes the server acceptance event from declaration.
+            v.riichi_accepted[r] = state.mjai_log.iter().rev()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .take_while(|event| event["type"] != "start_kyoku")
+                .any(|event| event["type"] == "reach_accepted" && event["actor"].as_u64() == Some(pid as u64));
 
             v.last_tedashis[r] = state.last_tedashis[pid as usize].map(|raw| KawaItem {
                 tile: mortal_obs_deaka(raw),
@@ -250,7 +270,25 @@ impl MortalSeatView {
         v.doras_seen = v.dora_indicators.len().min(5) as u8;
 
         v.tiles_seen = tiles_seen_3p(state, seat, &v.dora_indicators);
-        v.doras_owned = doras_owned_3p(state, &v.dora_indicators);
+        for &indicator in &v.dora_indicators {
+            let dora = crate::tiles::next_dora_tile34(mortal_obs_deaka(indicator) as u8, 3) as usize;
+            v.dora_factor[dora] = v.dora_factor[dora].saturating_add(1);
+        }
+        let mut red_seen = [false; 3];
+        for &t in state.players[seat as usize].hand.iter()
+            .chain(state.players.iter().flat_map(|p| p.discards.iter()))
+            .chain(state.players.iter().flat_map(|p| p.melds.iter().flat_map(|m| m.tiles.iter())))
+            .chain(v.dora_indicators.iter()) {
+            match t { 16 => red_seen[0] = true, 52 => red_seen[1] = true, 88 => red_seen[2] = true, _ => {} }
+        }
+        let visible_reds = red_seen.iter().filter(|&&seen| seen).count();
+        v.doras_seen = v.tiles_seen.iter().zip(v.dora_factor.iter())
+            .map(|(&seen, &factor)| (seen as usize) * (factor as usize))
+            .sum::<usize>().saturating_add(visible_reds).min(u8::MAX as usize) as u8;
+        let absolute_owned = doras_owned_3p(state, seat, &v.dora_indicators);
+        v.doras_owned = std::array::from_fn(|r| if r < NUM_PLAYERS_3P {
+            absolute_owned[(seat as usize + r) % NUM_PLAYERS_3P]
+        } else { 0 });
 
         // libriichi's `tiles_left` is the live wall, i.e. the tiles still
         // drawable excluding the 14-tile dead wall - exactly what
@@ -282,7 +320,11 @@ impl MortalSeatView {
         self.can_ankan = has(ActionType::Ankan);
         self.can_kakan = has(ActionType::Kakan);
         self.can_agari = has(ActionType::Tsumo) || has(ActionType::Ron);
-        self.can_ryukyoku = has(ActionType::KyushuKyuhai);
+        // The replay state's is_first_turn can outlive our first discard.
+        // Nine-terminals abort is only available on our first uninterrupted draw.
+        self.can_ryukyoku = has(ActionType::KyushuKyuhai)
+            && state.players[seat as usize].discards.is_empty()
+            && state.players.iter().all(|p| p.melds.is_empty() && p.kita_tiles.is_empty());
         self.can_pass = legal.len() > 1 && legal.iter().any(|a| a.action_type == ActionType::Pass);
 
         // Sanma has no chi, so the chi flags stay false.
@@ -303,10 +345,25 @@ impl MortalSeatView {
             .filter_map(|a| a.tile)
             .collect();
 
-        self.waits = [false; T];
-        for &w in &obs.waits {
-            self.waits[(w as usize).min(T - 1)] = true;
+        // libriichi retains the pre-draw hand's waits, including on a 14-tile turn.
+        let mut pre_draw = self.tehai;
+        if state.current_player == seat {
+            if let Some(tile) = state.drawn_tile {
+                let t = mortal_obs_deaka(tile);
+                pre_draw[t] = pre_draw[t].saturating_sub(1);
+            }
         }
+        let span = (pre_draw.iter().map(|&n| n as usize).sum::<usize>() / 3) as u8;
+        self.waits = [false; T];
+        for t in 0..T {
+            if (1..=7).contains(&t) || pre_draw[t] >= 4 { continue; }
+            let mut probe = pre_draw;
+            probe[t] += 1;
+            self.waits[t] = riichienv_core::shanten::calc_shanten_from_counts_3p(&probe, span) < 0;
+        }
+        let me = &state.players[seat as usize];
+        self.at_furiten = me.discards.iter().any(|&raw| self.waits[mortal_obs_deaka(raw)])
+            || me.missed_agari_doujun || me.missed_agari_riichi;
 
         // -- discard quality flags -----------------------------------------
         // Verbatim from libriichi `PlayerState::update_shanten_discards`; see
@@ -336,8 +393,8 @@ impl MortalSeatView {
         }
 
         // -- kan-select flag -------------------------------------------------
-        self.at_kan_select = !self.ankan_candidates.is_empty()
-            || !self.kakan_candidates.is_empty();
+        // Offering a kan is not the separate "which tile to kan" observation.
+        self.at_kan_select = false;
 
         if let Some((_, tile)) = state.last_discard {
             self.last_kawa_tile = Some(KawaItem {

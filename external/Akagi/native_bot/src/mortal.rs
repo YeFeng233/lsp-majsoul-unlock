@@ -1288,11 +1288,9 @@ fn mortal_action_index_4p(action: &Action) -> Option<usize> {
 
 /// Action index for 3-player (sanma).
 ///
-/// The layout is confirmed against the sanma fork's own documentation and mask
-/// construction (`libriichi/src/consts.rs` lists discard+aka, then riichi,
-/// nukidora, pon, kan, agari, ryukyoku, pass = 44, and `encode_obs` sets
-/// `mask[38] = nukidora`, `mask[39] = pon`, `mask[40] = kan`,
-/// `mask[41] = agari`, `mask[42] = ryukyoku`, `mask[43] = pass`).
+/// Akagi's 775-channel libriichi3p binary uses pon=38, kan=39, nukidora=40.
+/// A different sanma fork places nukidora first; it is not this model contract.
+/// These slots are verified using the pinned reference Bot's actual reactions.
 ///
 /// Chi does not exist in sanma, so no slot maps to it.
 fn mortal_action_index_3p(action: &Action) -> Option<usize> {
@@ -1311,9 +1309,9 @@ fn mortal_action_index_3p(action: &Action) -> Option<usize> {
             }
         }
         ActionType::Riichi => Some(37),
-        ActionType::Kita => Some(38), // nukidora (抜きドラ)
-        ActionType::Pon => Some(39),
-        ActionType::Daiminkan | ActionType::Ankan | ActionType::Kakan => Some(40),
+        ActionType::Pon => Some(38),
+        ActionType::Daiminkan | ActionType::Ankan | ActionType::Kakan => Some(39),
+        ActionType::Kita => Some(40), // nukidora (抜きドラ)
         ActionType::Tsumo | ActionType::Ron => Some(41),
         ActionType::KyushuKyuhai => Some(42),
         ActionType::Pass => Some(43),
@@ -1442,9 +1440,8 @@ pub fn rank_by_mortal_logits(
 
 /// Encode a 4-player position into Mortal's observation, plus the legal actions.
 ///
-/// Uses [`crate::mortal_obs::encode_mortal_obs`], the libriichi-parity encoder,
-/// which is verified bit-for-bit against the reference in
-/// `tests/mortal_obs_diff.rs`. `in_channels` selects the layout version: only
+/// Uses [`crate::mortal_obs::encode_mortal_obs`], a partial libriichi encoder.
+/// Complete value parity has not been established. `in_channels` selects the layout version: only
 /// the 1012-wide v4 layout is implemented, so any other width falls back to the
 /// legacy Akagi-style planes rather than silently feeding the model a buffer
 /// whose layout does not match its weights.
@@ -1471,7 +1468,7 @@ pub fn encode_mortal_obs_4p(
 /// Encode a 3-player position into Mortal's observation, plus the legal actions.
 ///
 /// Uses the `libriichi3p` layout (`obs_shape(4) = 775`) when `in_channels`
-/// is 775, which is what every sanma Mortal checkpoint expects. Other widths
+/// is 775, matching Akagi's supported sanma Mortal contract. Other widths
 /// fall back to the legacy Akagi-style planes rather than feeding the model a
 /// buffer whose layout disagrees with its weights.
 pub fn encode_mortal_obs_3p(
@@ -1480,11 +1477,12 @@ pub fn encode_mortal_obs_3p(
     in_channels: usize,
 ) -> (Vec<f32>, Vec<Action>) {
     let obs = state.get_observation(seat);
-    let legal: Vec<Action> = obs.legal_actions_method().into_iter().map(|a| a.0).collect();
+    let mut legal: Vec<Action> = obs.legal_actions_method().into_iter().map(|a| a.0).collect();
 
     if in_channels == crate::mortal_obs::CHANNELS_SANMA {
         let view = crate::state_features::MortalSeatView::from_state_3p(state, seat)
             .with_legal_actions_3p(state, seat);
+        legal.retain(|a| a.action_type != ActionType::KyushuKyuhai || view.can_ryukyoku);
         return (
             crate::mortal_obs::encode_mortal_obs_with(&view, crate::mortal_obs::Layout::SANMA),
             legal,
@@ -1873,9 +1871,9 @@ mod tests {
         let kita = Action::new(ActionType::Kita, None, vec![], Some(0));
         assert_eq!(mortal_action_index(&pass, 4), Some(45));
         assert_eq!(mortal_action_index(&pass, 3), Some(43));
-        // Sanma: 37 riichi, 38 nukidora, 39 pon, 40 kan, 41 agari, 42 ryukyoku,
+        // Sanma: 37 riichi, 38 pon, 39 kan, 40 nukidora, 41 agari, 42 ryukyoku,
         // 43 pass. Chi has no slot at all.
-        assert_eq!(mortal_action_index(&kita, 3), Some(38));
+        assert_eq!(mortal_action_index(&kita, 3), Some(40));
     }
 
     /// The sanma action slots, verified against the sanma fork's own mask
@@ -1897,11 +1895,11 @@ mod tests {
         let chi = Action::new(ActionType::Chi, Some(0), vec![4, 8], Some(0));
 
         assert_eq!(mortal_action_index(&riichi, 3), Some(37));
-        assert_eq!(mortal_action_index(&kita, 3), Some(38), "nukidora");
-        assert_eq!(mortal_action_index(&pon, 3), Some(39), "pon");
-        assert_eq!(mortal_action_index(&daiminkan, 3), Some(40), "daiminkan");
-        assert_eq!(mortal_action_index(&ankan, 3), Some(40), "ankan");
-        assert_eq!(mortal_action_index(&kakan, 3), Some(40), "kakan");
+        assert_eq!(mortal_action_index(&kita, 3), Some(40), "nukidora");
+        assert_eq!(mortal_action_index(&pon, 3), Some(38), "pon");
+        assert_eq!(mortal_action_index(&daiminkan, 3), Some(39), "daiminkan");
+        assert_eq!(mortal_action_index(&ankan, 3), Some(39), "ankan");
+        assert_eq!(mortal_action_index(&kakan, 3), Some(39), "kakan");
         assert_eq!(mortal_action_index(&tsumo, 3), Some(41), "tsumo");
         assert_eq!(mortal_action_index(&ron, 3), Some(41), "ron");
         assert_eq!(mortal_action_index(&kyushu, 3), Some(42), "kyuushu kyuuhai");

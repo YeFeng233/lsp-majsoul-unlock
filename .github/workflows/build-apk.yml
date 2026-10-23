@@ -87,7 +87,7 @@ jobs:
 
       - name: Test selected Mortal integration and feature regressions
         working-directory: external/Akagi/native_bot
-        run: cargo test --release --locked --target-dir ../../../hook-probe/build/rust --lib --test mortal_feature_regressions --test mortal_ranking_regressions --test mortal_state_obs --test shanten_len_div3
+        run: cargo test --release --locked --target-dir ../../../hook-probe/build/rust --lib --test mortal_feature_regressions --test mortal_ranking_regressions --test mortal_state_obs --test mortal_sanma_reference --test shanten_len_div3
 
       - name: Build Rust engines and native bridges for all ABIs
         shell: pwsh
