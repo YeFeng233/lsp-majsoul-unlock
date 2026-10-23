@@ -25,7 +25,7 @@ internal data class ImportedPolicy(
 
 /**
  * Validates and runs Akagi (.onnx) and Mortal (.pth / .onnx) policy models
- * in app-private storage. Akagi supports 4/3 players; Mortal is experimental 4-player v4 only.
+ * in app-private storage. Mortal v4 supports four players and the 775-channel sanma contract.
  */
 internal object OnnxModelStore {
     const val MAX_MODEL_MIB = 300
@@ -61,8 +61,8 @@ internal object OnnxModelStore {
     private val activeSessions = mutableMapOf<Int, Cached>()
     private val failedPlayers = mutableSetOf<Int>()
 
-    /** Akagi 4P/3P and experimental Mortal 4P v4. */
-    private val KNOWN_ACTION_SPACES = setOf(82, 60, 46)
+    /** Akagi 4P/3P and experimental Mortal v4 4P/sanma. */
+    private val KNOWN_ACTION_SPACES = setOf(82, 60, 46, 44)
     @Volatile private var appContext: Context? = null
 
     fun initialize(context: Context) { appContext = context.applicationContext }
@@ -143,7 +143,7 @@ internal object OnnxModelStore {
         initialize(context)
         val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            ?: "policy.onnx"
+            ?: uri.takeIf { it.scheme == "file" }?.lastPathSegment ?: "policy.onnx"
         val lowerName = displayName.lowercase()
         val isPthExt = lowerName.endsWith(".pth") || lowerName.endsWith(".pt")
         val isOnnxExt = lowerName.endsWith(".onnx")
@@ -183,9 +183,9 @@ internal object OnnxModelStore {
             if (treatAsPth) {
                 validatePthArchive(staged)
                 val detectedPlayers = AiNative.loadMortalPth(0, staged.absolutePath, false)
-                if (detectedPlayers != 4) {
+                if (detectedPlayers != 4 && detectedPlayers != 3) {
                     rejectionReason = "invalid_mortal_pth_$detectedPlayers"
-                    throw IllegalArgumentException("仅支持实验性四麻 Mortal v4；权重文件无效或结构不受支持 (状态码: $detectedPlayers)")
+                    throw IllegalArgumentException("仅支持实验性四麻/三麻 Mortal v4；权重文件无效或结构不受支持 (状态码: $detectedPlayers)")
                 }
                 val players = detectedPlayers
                 val folder = File(File(context.filesDir, "models"), "$players-$hash").apply { mkdirs() }
@@ -381,17 +381,19 @@ internal object OnnxModelStore {
                 require(inputs.size == 1 && session.outputNames.size == 1) { "Akagi 模型不支持额外输入输出" }
                 OnnxSpec(players,meta.description,0,1,c,t,actions,obs.key,output.first)
             }
-            c == 1012 && t == 34 && actions == 46 -> {
+            t == 34 && ((c == 1012 && actions == 46) || (c == 775 && actions == 44)) -> {
+                val players = if (c == 1012) 4 else 3
                 require(value("majmax.contract").let { it.isEmpty() || it.startsWith("mortal") }) { "模型协议与 Mortal v4 不匹配" }
+                require(value("majmax.players").let { it.isEmpty() || it == players.toString() }) { "Mortal 模型人数声明不匹配" }
                 val aux = inputs.filterKeys { it != obs.key }.mapValues { (_, info) ->
-                    require(info.shape.size == 2 && (info.shape[0] == 1L || info.shape[0] == -1L) && info.shape[1] == 46L) { "Mortal 附加输入仅支持 [1,46] 合法动作 mask" }
+                    require(info.shape.size == 2 && (info.shape[0] == 1L || info.shape[0] == -1L) && info.shape[1] == actions.toLong()) { "Mortal 附加输入仅支持 [1,$actions] 合法动作 mask" }
                     require(info.type == OnnxJavaType.BOOL || info.type == OnnxJavaType.FLOAT) { "mask 仅支持 bool 或 float32" }
                     AuxInput(info.type,info.shape)
                 }
                 require(aux.size <= 1) { "Mortal 最多支持一个 mask 输入" }
-                OnnxSpec(4,meta.description,1,4,c,t,actions,obs.key,output.first,aux)
+                OnnxSpec(players,meta.description,1,4,c,t,actions,obs.key,output.first,aux)
             }
-            else -> throw IllegalArgumentException("暂仅支持 Akagi 协议及实验性四麻 Mortal v4（1012×34 → 46）；三麻 Mortal 和旧版暂未开放")
+            else -> throw IllegalArgumentException("支持 Akagi 及实验性 Mortal v4：四麻 1012×34 → 46、三麻 775×34 → 44；旧版和其他结构暂不支持")
         }
         require(expectedPlayers == null || spec.players == expectedPlayers) { "模型适用人数不匹配" }
         run(session,spec,FloatArray(c*t),validation=true)

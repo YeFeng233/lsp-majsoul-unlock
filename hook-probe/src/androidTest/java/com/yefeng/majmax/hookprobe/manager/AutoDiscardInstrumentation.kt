@@ -8,13 +8,33 @@ import org.json.JSONObject
 /** Runs against Android's real JSONObject, clock supplied explicitly; no game input. */
 class AutoDiscardInstrumentation : Instrumentation() {
     private var controllerOnly = false
+    private var importFile: String? = null
     override fun onCreate(arguments: Bundle?) {
         controllerOnly = arguments?.getString("controllerOnly") == "true"
+        importFile = arguments?.getString("importFile")
         super.onCreate(arguments); start()
     }
     override fun onStart() {
         val output = Bundle()
         runCatching {
+            importFile?.let { path ->
+                val file = java.io.File(path).canonicalFile
+                check(file.parentFile == targetContext.cacheDir.canonicalFile) { "Use a model in the target app cache" }
+                check(AiNative.loadMortalPth(3, file.absolutePath, false) == 3) { "Expected a valid sanma checkpoint" }
+                val prefs = targetContext.getSharedPreferences("onnx-policy-models", 0)
+                val fourBefore = prefs.all.filterKeys { it.endsWith("_4") }
+                val unattendedBefore = targetContext.getSharedPreferences("unattended", 0).all.toMap()
+                val policy = OnnxModelStore.import(targetContext, android.net.Uri.fromFile(file))
+                check(policy.players == 3 && policy.format == "mortal-pth")
+                val result = OnnxModelStore.selfTest(targetContext, 3)
+                check(OnnxModelStore.activate(3) == 0)
+                check(OnnxModelStore.selectedCustom(targetContext, 3))
+                check(prefs.all.filterKeys { it.endsWith("_4") } == fourBefore)
+                check(targetContext.getSharedPreferences("unattended", 0).all == unattendedBefore)
+                output.putString("stream", "PASS import ${policy.name}: ${policy.bytes} bytes, ${policy.sha256}\n$result\nPASS activation; four-player and unattended settings preserved\n")
+                finish(-1, output)
+                return
+            }
             var tests = 0
             fun test(name: String, run: (AutoDiscardController, () -> Unit) -> Unit) {
                 var time = 0L
@@ -337,7 +357,10 @@ class AutoDiscardInstrumentation : Instrumentation() {
             }
             CatalogChecks.run(targetContext, context)
             sendStatus(0, Bundle().apply { putString("stream", "PASS unlock catalog update, recovery and GitHub routes\n") })
-            if (!controllerOnly) ModelContractChecks.run(targetContext, context)
+            if (!controllerOnly) {
+                ModelContractChecks.run(targetContext, context)
+                sendStatus(0, Bundle().apply { putString("stream", "PASS ONNX/JNI contracts: four-player and sanma, bool/float masks and crossed-pair rejection\n") })
+            }
             output.putString("stream", "$tests controller checks passed\n")
             finish(-1, output)
         }.onFailure {

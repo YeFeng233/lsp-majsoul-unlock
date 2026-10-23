@@ -61,7 +61,11 @@ for name,args in {
     'mortal-bool.onnx':(1012,34,46,9,False),
     'mortal-float.onnx':(1012,34,46,1,False),
     'mortal-sanma.onnx':(775,34,44,None,False),
+    'mortal-sanma-bool.onnx':(775,34,44,9,False),
+    'mortal-sanma-float.onnx':(775,34,44,1,False),
+    'mortal-sanma-wrong-actions.onnx':(775,34,46,None,False),
+    'mortal-four-wrong-actions.onnx':(1012,34,44,None,False),
     'mortal-old.onnx':(938,34,46,None,False),
 }.items():
     (out/name).write_bytes(model(*args))
-print('Generated 6 model-contract fixtures.')
+print('Generated 10 model-contract fixtures.')

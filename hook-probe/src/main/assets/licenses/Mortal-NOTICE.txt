@@ -6,7 +6,10 @@ Existing Akagi components retain their Apache-2.0 notices.
 The application repository retains its GPL-3.0 license and includes these
 additional third-party notices and the full Mortal license text.
 
-Experimental support is limited to 4-player Mortal v4, for manual advice.
+Experimental support includes 4-player Mortal v4 (1012/46) and sanma v4
+(775/44). Sanma validation also references Mateces/mortal-sanma:
+https://github.com/Mateces/mortal-sanma
+Validated custom models require explicit user opt-in for unattended execution.
 Feature tables contain approximations and are not claimed to reproduce the
 upstream model's full trained input pipeline. No Mortal model weights are
 bundled. Neither upstream project endorses this application.

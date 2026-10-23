@@ -1,6 +1,6 @@
-//! Experimental Mortal support; public import/activation accepts four-player v4 only.
+//! Experimental Mortal support for four-player v4 and 775-channel sanma v4.
 //! Other observation/action helpers remain internal compatibility code and do not
-//! establish upstream parity. Experimental models are excluded from unattended play.
+//! establish complete upstream observation parity.
 //!
 //! Provides:
 //! - Direct PyTorch `.pth` checkpoint loading via `candle_nn::VarBuilder` with
@@ -33,6 +33,19 @@ pub const MORTAL_ACTION_SPACE_4P: usize = 46;
 pub const MORTAL_ACTION_SPACE_3P: usize = 44;
 /// Mortal tile axis width (both 4P and 3P `mortal-sanma` use 34 tile columns).
 pub const MORTAL_TILE_DIM: usize = 34;
+
+pub fn supported_mortal_contract(players: u8, version: u8, channels: usize, actions: usize) -> bool {
+    version == 4 && matches!((players, channels, actions), (4, 1012, 46) | (3, 775, 44))
+}
+
+#[test]
+fn supported_contracts_keep_sanma_and_four_player_layouts_separate() {
+    assert!(supported_mortal_contract(3, 4, 775, 44));
+    assert!(supported_mortal_contract(4, 4, 1012, 46));
+    for (p, v, c, a) in [(3,4,1012,46), (4,4,775,44), (3,4,775,46), (4,4,1012,44), (3,3,775,44), (0,4,775,44)] {
+        assert!(!supported_mortal_contract(p, v, c, a));
+    }
+}
 
 /// Metadata describing an active Mortal model (.pth or .onnx).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,8 +96,9 @@ pub fn set_custom_onnx_contract(
     in_channels: usize,
     action_space: usize,
 ) {
+    if num_players != 3 && num_players != 4 { return; }
     if let Ok(mut guard) = contract_slot(num_players).lock() {
-        if kind == 1 && (num_players != 4 || version != 4 || in_channels != 1012 || action_space != 46) {
+        if kind == 1 && !supported_mortal_contract(num_players, version, in_channels, action_space) {
             return;
         }
         if kind == 1 {
@@ -109,7 +123,7 @@ pub fn load_and_activate_pth(expected_players: u8, path: &str) -> i32 {
 pub fn load_pth(expected_players: u8, path: &str, activate: bool) -> i32 {
     let model = match MortalPthModel::load_from_file(Path::new(path)) {
         Ok(m) => m,
-        Err(_) => return -2,
+        Err(error) => { eprintln!("mortal: checkpoint load failed: {error}"); return -2; },
     };
     let players = model.meta.num_players;
     if expected_players != 0 && expected_players != players {
@@ -422,10 +436,11 @@ impl MortalPthModel {
         //
         // Do not confuse v2/v3: upstream is `{1: 938, 2: 942, 3: 934, 4: 1012}`,
         // so v3 (934) is *narrower* than v2 (942) and v1 (938).
-        if in_channels != 1012 {
-            return Err(candle_core::Error::Msg("Only experimental four-player Mortal v4 (1012 channels) is supported".into()));
-        }
-        let (num_players, version, action_space) = (4u8, 4u8, MORTAL_ACTION_SPACE_4P);
+        let (num_players, version, action_space) = match in_channels {
+            1012 => (4u8, 4u8, MORTAL_ACTION_SPACE_4P),
+            775 => (3u8, 4u8, MORTAL_ACTION_SPACE_3P),
+            _ => return Err(candle_core::Error::Msg("Only experimental Mortal v4 (four-player 1012 / sanma 775 channels) is supported".into())),
+        };
 
         let actv = Actv::for_version(version);
         let mut blocks = Vec::new();

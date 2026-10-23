@@ -2,7 +2,7 @@
 name = "native_bot"
 version = "0.1.0"
 edition = "2021"
-description = "Local Akagi mahjong policy inference and an experimental four-player Mortal v4 port."
+description = "Local Akagi mahjong policy inference and an experimental Mortal v4 port for four players and sanma."
 # Existing Akagi code: Apache-2.0. Mortal-derived modules: AGPL-3.0-only; see NOTICE-Mortal.
 license = "Apache-2.0 AND AGPL-3.0-only"
 

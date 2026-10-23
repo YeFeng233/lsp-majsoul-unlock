@@ -13,7 +13,10 @@ Existing Akagi code retains its Apache-2.0 notices. The repository root's
 GPL-3.0 license is preserved; this notice identifies the additional upstream
 terms for the Mortal-derived components.
 
-Integration changes by YeFeng233: limit import to experimental 4-player v4;
-fix feature, ranking, masking and activation behavior; keep experimental
-models out of unattended execution. Models and weights are not supplied by
-this integration. The original authors do not endorse this application.
+Integration changes by YeFeng233: experimental Mortal v4 imports for four
+players (1012 channels / 46 actions) and sanma (775 channels / 44 actions);
+fix feature, ranking, masking and activation behavior. Sanma network validation
+also references Mateces/mortal-sanma (https://github.com/Mateces/mortal-sanma).
+Validated custom models require explicit user opt-in for unattended execution.
+Models and weights are not supplied by this integration. The original authors
+do not endorse this application.

@@ -55,7 +55,7 @@ internal fun AiScreen(padding: PaddingValues) {
     var autoDelay by remember { mutableStateOf(AutoDelaySettings.read(context)) }
     var fourModel by remember { mutableStateOf(OnnxModelStore.info(context, 4)) }
     var threeModel by remember { mutableStateOf(OnnxModelStore.info(context, 3)) }
-    var modelMessage by remember { mutableStateOf("支持 Akagi ONNX，以及实验性四麻 Mortal v4（ONNX/PTH/PT，单文件上限 ${OnnxModelStore.MAX_MODEL_MIB} MiB）。兼容的自定义模型可用于无人值守，仍需手动开启；三麻 Mortal 暂不开放。模型仅保存在本机。") }
+    var modelMessage by remember { mutableStateOf("支持 Akagi ONNX，以及实验性四麻/三麻 Mortal v4（ONNX/PTH/PT，单文件上限 ${OnnxModelStore.MAX_MODEL_MIB} MiB）。自动识别人数并保存到对应槽位；兼容的自定义模型仍需手动开启无人值守。模型仅保存在本机。") }
     val scope = rememberCoroutineScope()
     val status by AiStatus.state.collectAsStateWithLifecycle()
     val autoStatus by AutoDiscardState.state.collectAsStateWithLifecycle()
@@ -133,7 +133,7 @@ internal fun AiScreen(padding: PaddingValues) {
                 Text("关闭模式后可正常退出游戏；收纳后点击“停”浮标会先关闭无人值守模式。整场结束后不会自动创建新对局。", style = MaterialTheme.typography.bodySmall)
             }
         }
-        Text("实验性 Mortal v4 仅支持四麻，可手动开启无人值守；特征含近似计算，尚未完成与上游的完整一致性验证。", style = MaterialTheme.typography.bodySmall)
+        Text("实验性 Mortal v4 支持四麻和三麻，可手动开启无人值守；特征含近似计算，尚未完成与上游的完整一致性验证。", style = MaterialTheme.typography.bodySmall)
         Text("策略模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         PolicyModelCard(
             players = 4, model = fourModel, selectedCustom = OnnxModelStore.selectedCustom(context, 4),
