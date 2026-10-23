@@ -17,13 +17,19 @@ fn main() -> anyhow::Result<()> {
                 native_bot::mjai_compat::apply_sanma_event(&mut state, event);
             }
         }
+        let started=std::time::Instant::now();
         let (obs, legal) = encode_mortal_obs_3p(&mut state, seat, 775);
+        let encode_micros=started.elapsed().as_micros();
+        let started=std::time::Instant::now();
+        let (cached,_) = encode_mortal_obs_3p(&mut state, seat, 775);
+        let cached_micros=started.elapsed().as_micros();
+        anyhow::ensure!(obs==cached,"cached observation changed for {}",case["id"]);
         let mut mask = vec![false; 44];
         for action in &legal {
             if let Some(index) = mortal_action_index(action, 3) { mask[index] = true; }
         }
         let index = |kind| mortal_action_index(&Action::new(kind, None, vec![], None), 3);
-        results.push(json!({"id":case["id"],"obs":obs,"mask":mask,
+        results.push(json!({"id":case["id"],"obs":obs,"mask":mask,"encodeMicros":encode_micros,"cachedMicros":cached_micros,
             "specialActionIndices":{"kita":index(ActionType::Kita),"pon":index(ActionType::Pon),"kan":index(ActionType::Ankan)}}));
     }
     fs::write(&args[2], serde_json::to_vec(&results)?)?;

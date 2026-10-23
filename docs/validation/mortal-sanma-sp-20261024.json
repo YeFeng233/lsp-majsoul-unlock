@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "date": "2026-10-24",
+  "previousCommit": "e84823f01b5aaa3cf8eb3ec2953755e16dd99ab1",
+  "referenceCommit": "shinkuan/Akagi@91cc2993e4e3682248d33d73d93afe055040e700",
+  "spSource": "Mateces/mortal-sanma@bf69bc320d6072bbeae2abfdc57bf876a5bab2e3",
+  "verdict": "Full-vector and main-action consistency passes the documented fixed sets. Remains experimental; not a win-rate estimate or universal parity claim.",
+  "featureTolerance": 1e-06,
+  "scope": "Only the supplied 775x34/44 sanma checkpoint. Generated sets reuse nine targeted cases; extended set overlaps development; Android replays the same extended cases. Do not sum as independent matches.",
+  "androidScope": "Production Rust vectors generated on phone ARM64; network comparisons subsequently run on host with the same checkpoint. Encoding timings exclude neural network inference and include possible cross-case cache hits and first initialization.",
+  "remaining": [
+    "Full-game state coverage and rare chankan/kokushi/kita reactions",
+    "End-to-end second-stage multi-kan and riichi-discard comparison",
+    "Long-match win-rate and stability benchmarks",
+    "Four-player Mortal feature approximations"
+  ],
+  "logs": [
+    {
+      "file": "2026011603gm-00b9-0000-2b45278f.xml.zst",
+      "sha256": "c011cafe0f347e4945db08f6a00ffc17bde75850f092359605fe6a3d4f69e386",
+      "url": "https://github.com/Mateces/mortal-sanma/blob/bf69bc320d6072bbeae2abfdc57bf876a5bab2e3/test-data/2026011603gm-00b9-0000-2b45278f.xml.zst"
+    },
+    {
+      "file": "2026011603gm-00b9-0000-2ddc9de6.xml.zst",
+      "sha256": "95bd236a3de63feb5895017e9a41f200f6db993dbf81fe909bc4d96cd46dd754",
+      "url": "https://github.com/Mateces/mortal-sanma/blob/bf69bc320d6072bbeae2abfdc57bf876a5bab2e3/test-data/2026011603gm-00b9-0000-2ddc9de6.xml.zst"
+    },
+    {
+      "file": "2026011603gm-00b9-0000-36cf9559.xml.zst",
+      "sha256": "a8b8aae5cd9bde0880b6a6586014cff4d1fde22fc8d302d06f63b654b63589d3",
+      "url": "https://github.com/Mateces/mortal-sanma/blob/bf69bc320d6072bbeae2abfdc57bf876a5bab2e3/test-data/2026011603gm-00b9-0000-36cf9559.xml.zst"
+    }
+  ],
+  "sets": {
+    "development": {
+      "samples": 129,
+      "seed": 20261024,
+      "skipped": [],
+      "exactFeaturePositions": 129,
+      "maskAgreement": 129,
+      "featureTop1Agreement": 129,
+      "totalTop1Agreement": 129,
+      "checkpointSha256": "03859386c2fc300c2a03b26613f0e8e62e70d5632336dd5a64e8ab726c5d92c8",
+      "referenceBinarySha256": "0a0b295e6954c7fe85765b69519c8bcfd31af19c224281b203f9c20672962523",
+      "referenceModelSha256": "25dc6e88cd747c66dcff9088c1902560112f2c059327957b43fa35f10ce47436",
+      "casesSha256": "af82ca995e82f114f6839942b458e55b4db5ce7f037f9d99d555668607ca8b76",
+      "failedCases": [],
+      "maxFeatureError": 0.0,
+      "maxLegalQError": 0.0
+    },
+    "holdout": {
+      "samples": 309,
+      "seed": 20261026,
+      "skipped": [],
+      "exactFeaturePositions": 309,
+      "maskAgreement": 309,
+      "featureTop1Agreement": 309,
+      "totalTop1Agreement": 309,
+      "checkpointSha256": "03859386c2fc300c2a03b26613f0e8e62e70d5632336dd5a64e8ab726c5d92c8",
+      "referenceBinarySha256": "0a0b295e6954c7fe85765b69519c8bcfd31af19c224281b203f9c20672962523",
+      "referenceModelSha256": "25dc6e88cd747c66dcff9088c1902560112f2c059327957b43fa35f10ce47436",
+      "casesSha256": "98a53f817d521010c67dc882251924a2ff86e3a1200cde586d5ae87dc43f26ce",
+      "failedCases": [],
+      "maxFeatureError": 0.0,
+      "maxLegalQError": 0.0
+    },
+    "fresh-holdout": {
+      "samples": 189,
+      "seed": 20261027,
+      "skipped": [],
+      "exactFeaturePositions": 189,
+      "maskAgreement": 189,
+      "featureTop1Agreement": 189,
+      "totalTop1Agreement": 189,
+      "checkpointSha256": "03859386c2fc300c2a03b26613f0e8e62e70d5632336dd5a64e8ab726c5d92c8",
+      "referenceBinarySha256": "0a0b295e6954c7fe85765b69519c8bcfd31af19c224281b203f9c20672962523",
+      "referenceModelSha256": "25dc6e88cd747c66dcff9088c1902560112f2c059327957b43fa35f10ce47436",
+      "casesSha256": "77cdd1dc16c8170937e81491b960202c5e2d78ec38c9ce19b05a2a6f567c2169",
+      "failedCases": [],
+      "maxFeatureError": 0.0,
+      "maxLegalQError": 0.0
+    },
+    "public-prefixes": {
+      "samples": 70,
+      "seed": 20261024,
+      "skipped": [],
+      "exactFeaturePositions": 70,
+      "maskAgreement": 70,
+      "featureTop1Agreement": 70,
+      "totalTop1Agreement": 70,
+      "checkpointSha256": "03859386c2fc300c2a03b26613f0e8e62e70d5632336dd5a64e8ab726c5d92c8",
+      "referenceBinarySha256": "0a0b295e6954c7fe85765b69519c8bcfd31af19c224281b203f9c20672962523",
+      "referenceModelSha256": "25dc6e88cd747c66dcff9088c1902560112f2c059327957b43fa35f10ce47436",
+      "casesSha256": "5a3d97cdee4ee20be74e4c7ec45106df167389b4be5055423bfd4a5ff625fc58",
+      "failedCases": [],
+      "maxFeatureError": 0.0,
+      "maxLegalQError": 0.0
+    },
+    "extended": {
+      "samples": 43,
+      "seed": 20261024,
+      "skipped": [],
+      "exactFeaturePositions": 43,
+      "maskAgreement": 43,
+      "featureTop1Agreement": 43,
+      "totalTop1Agreement": 43,
+      "checkpointSha256": "03859386c2fc300c2a03b26613f0e8e62e70d5632336dd5a64e8ab726c5d92c8",
+      "referenceBinarySha256": "0a0b295e6954c7fe85765b69519c8bcfd31af19c224281b203f9c20672962523",
+      "referenceModelSha256": "25dc6e88cd747c66dcff9088c1902560112f2c059327957b43fa35f10ce47436",
+      "casesSha256": "08dfdfb78229395eeff7c7dcd09ddd8b9b120b38341679c6046b39a5a6db39a3",
+      "failedCases": [],
+      "maxFeatureError": 0.0,
+      "maxLegalQError": 0.0
+    },
+    "android-arm64": {
+      "samples": 43,
+      "seed": 20261024,
+      "skipped": [],
+      "exactFeaturePositions": 43,
+      "maskAgreement": 43,
+      "featureTop1Agreement": 43,
+      "totalTop1Agreement": 43,
+      "checkpointSha256": "03859386c2fc300c2a03b26613f0e8e62e70d5632336dd5a64e8ab726c5d92c8",
+      "referenceBinarySha256": "0a0b295e6954c7fe85765b69519c8bcfd31af19c224281b203f9c20672962523",
+      "referenceModelSha256": "25dc6e88cd747c66dcff9088c1902560112f2c059327957b43fa35f10ce47436",
+      "casesSha256": "08dfdfb78229395eeff7c7dcd09ddd8b9b120b38341679c6046b39a5a6db39a3",
+      "failedCases": [],
+      "maxFeatureError": 0.0,
+      "maxLegalQError": 0.0
+    }
+  },
+  "androidEncodingTimings": {
+    "encodeMicros": {
+      "medianMs": 0.087,
+      "p95Ms": 6.129799999999991,
+      "maxMs": 104.551,
+      "slowestCase": "after-own-kita"
+    },
+    "cachedMicros": {
+      "medianMs": 0.074,
+      "p95Ms": 0.13399999999999998,
+      "maxMs": 0.372,
+      "slowestCase": "exhausted-live-wall"
+    }
+  },
+  "validation": {
+    "nativeChecks": 79,
+    "spChecksPassed": 11,
+    "upstreamYonmaFixturesIgnored": 2,
+    "protocolChecks": 13,
+    "androidControllerChecks": 39,
+    "androidOnnxJniContracts": "passed for four players and sanma",
+    "selectedModels": "existing 3p/4p Mortal PTH loading and forward self-checks passed",
+    "preservedPreferences": [
+      "onnx-policy-models",
+      "unattended",
+      "ai-window"
+    ],
+    "abiVerification": "arm64-v8a: 7 libraries; architecture/dependencies/alignment pass",
+    "apkSha256": "3846b34bf8e0e55af9688059eba1ca400dca4860de8f4dcbd25b2198dc744bce",
+    "apkVersion": "0.11.0",
+    "buildSha": "sanma-sp-dev",
+    "installed": true
+  }
+}

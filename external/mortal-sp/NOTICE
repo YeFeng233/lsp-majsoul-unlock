@@ -1,0 +1,14 @@
+Selected from Mateces/mortal-sanma, commit bf69bc320d6072bbeae2abfdc57bf876a5bab2e3.
+https://github.com/Mateces/mortal-sanma
+Derived from Equim-chan/Mortal, AGPL-3.0-or-later. LICENSE is included.
+Original algorithm attribution and source links remain in the selected files.
+upstream-files.json records the original source hashes before local changes.
+
+Integration by YeFeng233: native-only subset without Python or WASM bindings;
+the immutable agari lookup table uses std::collections::HashMap instead of
+BoomHashMap, preserving the keys, values and lookup results. Sanma model
+compatibility is checked against Akagi's pinned 775-channel reference.
+Tile.next uses sanma's 1m/9m dora cycle. Tile.prev intentionally retains the
+old reference's uradora-estimation behavior. Two upstream yonma EV fixtures
+remain ignored because their hardcoded values assume four-player payments.
+No model weights are included. Upstream authors do not endorse this application.

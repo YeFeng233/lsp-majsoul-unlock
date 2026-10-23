@@ -129,11 +129,14 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--reference-dir',type=Path,required=True)
     p.add_argument('--checkpoint',type=Path,required=True)
-    p.add_argument('--replay-exe',type=Path,required=True)
+    production=p.add_mutually_exclusive_group(required=True)
+    production.add_argument('--replay-exe',type=Path)
+    production.add_argument('--production-observations',type=Path,help='Use already exported production observations, e.g. from Android')
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--samples',type=int,default=120)
     p.add_argument('--seed',type=int,default=20261024)
     p.add_argument('--cases',type=Path,help='Optional independent MJAI replay cases instead of generated positions')
+    p.add_argument('--export-fixtures',type=Path,help='Export compact full reference vectors for a small regression set')
     p.add_argument('--expected-reference-sha256',default=REFERENCE_BINARY_SHA256)
     p.add_argument('--diagnose-sp',action='store_true',help='Offline ablation: substitute reference SP planes; never changes the app')
     args=p.parse_args();args.output.mkdir(parents=True,exist_ok=True)
@@ -160,14 +163,31 @@ def main():
         except Exception as ex: errors.append(dict(id=case['id'],error=str(ex)))
     cases_path=args.output/'cases.json';rust_path=args.output/'production-observations.json'
     cases_path.write_text(json.dumps(valid),encoding='utf-8')
-    subprocess.run([str(args.replay_exe.resolve()),str(cases_path),str(rust_path)],check=True)
+    if args.production_observations:
+        rust_path.write_bytes(args.production_observations.read_bytes())
+    else:
+        subprocess.run([str(args.replay_exe.resolve()),str(cases_path),str(rust_path)],check=True)
     production=json.loads(rust_path.read_text(encoding='utf-8'))
+    if [c['id'] for c in valid] != [c['id'] for c in production]:
+        p.error('Production observation count/order does not match the independent cases')
     np.savez_compressed(args.output/'reference-observations.npz',
                         obs=np.stack([x[0] for x in refs]),mask=np.stack([x[1] for x in refs]))
+    if args.export_fixtures:
+        if len(valid)>64: p.error('Choose at most 64 cases when exporting full regression vectors')
+        fixtures=[]
+        for case,(obs,mask) in zip(valid,refs):
+            features={str(i):float(row[0]) if np.all(row==row[0]) else row.tolist() for i,row in enumerate(obs)}
+            fixtures.append(dict(**case,mask=np.flatnonzero(mask).tolist(),features=features))
+        args.export_fixtures.write_text(json.dumps(dict(
+            source='shinkuan/Akagi@91cc2993e4e3682248d33d73d93afe055040e700',
+            binarySha256=args.expected_reference_sha256,
+            note='Synthetic events; complete 775 x 34 vectors, including native SP, tolerance 1e-6. No weights.',
+            cases=fixtures),separators=(',',':')),encoding='utf-8')
     brain,dqn=reference_network(args.reference_dir,args.checkpoint)
     metrics=[]; different_channels=collections.Counter()
     for case,(ref,ref_mask),local in zip(valid,refs,production):
         obs=np.array(local['obs'],np.float32).reshape(775,34);mask=np.array(local['mask'],bool)
+        if mask.shape!=(44,) or not np.isfinite(obs).all(): p.error(f"Invalid production vector: {case['id']}")
         delta=np.abs(obs-ref)
         for channel in np.flatnonzero(np.any(delta>1e-6,axis=1)): different_channels[int(channel)]+=1
         with torch.inference_mode():

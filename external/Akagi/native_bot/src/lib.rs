@@ -39,6 +39,8 @@ pub mod state_features;
 pub mod state_features_3p;
 #[cfg(feature = "infer")]
 pub mod sp_tables;
+#[cfg(feature = "infer")]
+mod sanma_sp;
 
 /// Feature-plane and action-space geometry for a given player count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

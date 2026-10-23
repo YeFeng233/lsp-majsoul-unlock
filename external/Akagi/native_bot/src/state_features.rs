@@ -87,6 +87,8 @@ pub struct MortalSeatView {
     // -- single-player table ----------------------------------------------
     pub max_ev: f32,
     pub sp_candidates: Vec<SpCandidate>,
+    /// Native SP's best non-worsening discard, weighted by available copies.
+    pub sp_best_required: Option<u8>,
 }
 
 impl Default for MortalSeatView {
@@ -141,6 +143,7 @@ impl Default for MortalSeatView {
             can_agari: false,
             can_ryukyoku: false,
             max_ev: 0.0,
+            sp_best_required: None,
             sp_candidates: Vec::new(),
         }
     }

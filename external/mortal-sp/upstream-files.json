@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/Mateces/mortal-sanma",
+  "commit": "bf69bc320d6072bbeae2abfdc57bf876a5bab2e3",
+  "files": {
+    "macros.rs": "1369c5b91af1da0e9b615d700c5e1c94605bb30b0839d328ead84e9a93d493df",
+    "tile.rs": "7634faa81232dfc4d8e93a66fe09a12ccaa04e3cc9042e39bc53899f5fd20e81",
+    "hand.rs": "bf0c7d516902ba08a0e898d9d316b656609b5859bc32a74a6661bab88a32065f",
+    "vec_ops.rs": "eac0b48a7912ab05446f18d14f3bb6b37c2db56627032236ccd18929a680820c",
+    "algo/mod.rs": "cc9fa208cebd55fa7fc501b05066e805f7ee5618506ea01ecdfefbb48ef9698e",
+    "algo/agari.rs": "e74f508573c01bdc756f2c496346ab70cc62e6c1d636e602832bb674491ab492",
+    "algo/point.rs": "2065795894aa639eb7864f17966d35dee3a8177685b93e51d165bf5110e02278",
+    "algo/shanten.rs": "cc6d3dcd044f3c958c77ccf16327cf7eb9a04fe4152858fb4444a9ec990299a2",
+    "algo/sp/calc.rs": "08204bb537124a8cf2013e815ccc03a42addedbe63cb6c5b9383dbdc43753cc2",
+    "algo/sp/candidate.rs": "86da6856458ddbad748406a7f3f2319193810256cf833ff7bd84673b386575a0",
+    "algo/sp/mod.rs": "e08a879f2c56d80a268fdb5fad3cdfb11b330bcd29397e7424e0be9375b5ce18",
+    "algo/sp/state.rs": "26df39bcfa62a1aa5c9f29f9fd96b42caacd5510ac0d6c22b55a9d79132f8cf8",
+    "algo/sp/tile.rs": "c0b8c14d3cee3c2e48cd2eb445dfae66276cb654f81b4838a191f61e2f277396",
+    "algo/data/agari.bin.gz": "e05a8d775669f7c152aa727078061c4ebdd48491e99e0457dfcc1845b4d3af23",
+    "algo/data/shanten_jihai.bin.gz": "798dab73e104464b408c215dc82459a0c7bdff878575fe349dabfebb7d412ee0",
+    "algo/data/shanten_suhai.bin.gz": "e9dc0ad40a9a4a3fff337f0da0afa6827984dd3993f52ce5dd139238f98de36c",
+    "algo/data/uradora_prob_table.txt": "742a91bb39ae6c35ecad6228093bfc65b444ba87571bbad4ffa38237a1fd8620"
+  }
+}

@@ -9,7 +9,11 @@ additional third-party notices and the full Mortal license text.
 Experimental support includes 4-player Mortal v4 (1012/46) and sanma v4
 (775/44). Sanma validation also references Mateces/mortal-sanma:
 https://github.com/Mateces/mortal-sanma
+Native sanma SP/shanten/scoring subset: AGPL-3.0-or-later, selected from
+Mateces/mortal-sanma commit bf69bc320d6072bbeae2abfdc57bf876a5bab2e3.
+Source, attribution and original file hashes are in external/mortal-sp.
 Validated custom models require explicit user opt-in for unattended execution.
-Feature tables contain approximations and are not claimed to reproduce the
-upstream model's full trained input pipeline. No Mortal model weights are
+Sanma features match the pinned 775-channel reference on the documented fixed
+validation sets; this does not establish match win rate or universal parity.
+Four-player feature tables still contain approximations. No Mortal weights are
 bundled. Neither upstream project endorses this application.

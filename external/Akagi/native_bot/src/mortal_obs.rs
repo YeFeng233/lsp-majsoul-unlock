@@ -588,12 +588,13 @@ pub fn encode_mortal_obs_with(view: &MortalSeatView, layout: Layout) -> Vec<f32>
         }
         p.advance(2 * TILES);
 
-        if let Some(best) = view
-            .sp_candidates
-            .iter()
-            .max_by_key(|c| (!c.shanten_down, c.required_tiles.len()))
+        if let Some(best) = view.sp_best_required.or_else(|| {
+            view.sp_candidates.iter()
+                .max_by_key(|c| (!c.shanten_down, c.required_tiles.len()))
+                .map(|c| c.tile)
+        })
         {
-            p.assign(p.idx, deaka(best.tile), 1.0);
+            p.assign(p.idx, deaka(best), 1.0);
         }
         p.advance(2);
 

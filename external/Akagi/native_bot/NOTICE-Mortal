@@ -9,6 +9,9 @@ hook-probe/src/main/assets/licenses/Mortal-LICENSE.txt.
 
 Mortal-derived modules: mortal.rs, mortal_obs.rs, state_features.rs,
 state_features_3p.rs and their associated feature-table adaptations.
+sanma_sp.rs integrates the native algorithm subset in external/mortal-sp,
+selected from Mateces/mortal-sanma commit bf69bc320d6072bbeae2abfdc57bf876a5bab2e3
+(AGPL-3.0-or-later). Its NOTICE, LICENSE and upstream source hashes are retained.
 Existing Akagi code retains its Apache-2.0 notices. The repository root's
 GPL-3.0 license is preserved; this notice identifies the additional upstream
 terms for the Mortal-derived components.

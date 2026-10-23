@@ -31,7 +31,7 @@ fn rel3(pid: u8, seat: u8) -> usize {
 /// [`shanten_from_hand_vec`].
 fn shanten_3p(tehai: &[u8; T]) -> u8 {
     let len: usize = tehai.iter().map(|&c| c as usize).sum();
-    let s = riichienv_core::shanten::calc_shanten_from_counts_3p(tehai, (len / 3) as u8);
+    let s = mortal_sp::algo::shanten::calc_all(tehai, (len / 3) as u8);
     s.clamp(0, 6) as u8
 }
 
@@ -80,12 +80,162 @@ fn tedashi_from_log(state: &GameState3P) -> Option<[Vec<bool>; NUM_PLAYERS_3P]> 
         let Some(actor) = v.get("actor").and_then(|a| a.as_u64()) else {
             continue;
         };
-        let tsumogiri = v.get("tsumogiri").and_then(|t| t.as_bool()).unwrap_or(false);
+        let tsumogiri = v
+            .get("tsumogiri")
+            .and_then(|t| t.as_bool())
+            .unwrap_or(false);
         if let Some(slot) = flags.get_mut(actor as usize) {
             slot.push(!tsumogiri);
         }
     }
     Some(flags)
+}
+
+/// Rebuild discard slots with the dora/riichi flags at the time of discard.
+/// Called tiles stay in the pond; skipped turns are represented by empty slots.
+fn restore_river_history(view: &mut MortalSeatView, state: &GameState3P, seat: u8) {
+    if state.mjai_log.is_empty() {
+        return;
+    }
+    let mut rivers: [Vec<Option<KawaItem>>; 4] = Default::default();
+    for river in rivers.iter_mut().take(rel3(state.oya, seat)) {
+        river.push(None);
+    }
+    let mut declared = [false; 3];
+    let mut accepted = [false; 3];
+    let mut dora = [0u8; T];
+    let mut chi_pon = None;
+    let mut kan = [None; 4];
+    let parse = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(|s| s.parse::<mortal_sp::tile::Tile>().ok())
+            .filter(|t| !t.is_unknown())
+    };
+    for line in &state.mjai_log {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let kind = event["type"].as_str().unwrap_or("");
+        if matches!(kind, "start_kyoku" | "dora") {
+            if let Some(t) = parse(&event["dora_marker"]) {
+                dora[t.next().deaka().as_usize()] += 1;
+            }
+            continue;
+        }
+        let Some(pid) = event["actor"]
+            .as_u64()
+            .filter(|&p| p < 3)
+            .map(|p| p as usize)
+        else {
+            continue;
+        };
+        let r = rel3(pid as u8, seat);
+        match kind {
+            "reach" => declared[pid] = true,
+            "reach_accepted" => accepted[pid] = true,
+            "pon" | "daiminkan" => {
+                if let Some(target) = event["target"].as_u64().filter(|&p| p < 3) {
+                    // The 775 reference retains the four-seat skip loop;
+                    // its dummy seat is folded through rel3 like real actors.
+                    let mut skipped = (target as u8 + 1) % 4;
+                    while skipped != pid as u8 {
+                        rivers[rel3(skipped, seat)].push(None);
+                        skipped = (skipped + 1) % 4;
+                    }
+                }
+                if kind == "pon" {
+                    if let Some(consumed) = event["consumed"].as_array() {
+                        if let (Some(a), Some(b)) = (
+                            consumed.first().and_then(parse),
+                            consumed.get(1).and_then(parse),
+                        ) {
+                            chi_pon = Some((a.deaka().as_usize(), b.deaka().as_usize()));
+                        }
+                    }
+                } else if let Some(t) = parse(&event["pai"]) {
+                    if let Some(slot) = kan.iter_mut().find(|s| s.is_none()) {
+                        *slot = Some(t.deaka().as_u8() * 4);
+                    }
+                }
+            }
+            "ankan" | "kakan" => {
+                let t = parse(&event["pai"]).or_else(|| {
+                    event["consumed"]
+                        .as_array()
+                        .and_then(|v| v.first())
+                        .and_then(parse)
+                });
+                if let (Some(t), Some(slot)) = (t, kan.iter_mut().find(|s| s.is_none())) {
+                    *slot = Some(t.deaka().as_u8() * 4);
+                }
+            }
+            "dahai" => {
+                if let Some(t) = parse(&event["pai"]) {
+                    let item = KawaItem {
+                        tile: t.deaka().as_usize(),
+                        is_aka: t.is_aka(),
+                        is_dora: dora[t.deaka().as_usize()] > 0,
+                        is_tedashi: !event["tsumogiri"].as_bool().unwrap_or(false),
+                        is_tsumogiri: event["tsumogiri"].as_bool().unwrap_or(false),
+                        is_riichi: declared[pid] && !accepted[pid],
+                        chi_pon: chi_pon.take(),
+                        kan: std::mem::take(&mut kan),
+                    };
+                    if item.is_tedashi {
+                        view.last_tedashis[r] = Some(item);
+                    }
+                    if item.is_riichi {
+                        view.riichi_sutehais[r] = Some(item);
+                    }
+                    rivers[r].push(Some(item));
+                }
+            }
+            _ => {}
+        }
+    }
+    view.kawa = rivers;
+}
+
+/// Accepted riichi freezes discard-quality planes at the declaration hand.
+fn declaration_hand(state: &GameState3P, seat: u8) -> Option<[u8; T]> {
+    let mut hand = [0u8; T];
+    for line in &state.mjai_log {
+        let e: serde_json::Value = serde_json::from_str(line).ok()?;
+        let index = |v: &serde_json::Value| {
+            v.as_str()
+                .and_then(|s| s.parse::<mortal_sp::tile::Tile>().ok())
+                .filter(|t| !t.is_unknown())
+                .map(|t| t.deaka().as_usize())
+        };
+        if e["type"] == "start_kyoku" {
+            for t in e["tehais"][seat as usize].as_array()? {
+                hand[index(t)?] += 1;
+            }
+        }
+        if e["actor"].as_u64() != Some(seat as u64) {
+            continue;
+        }
+        match e["type"].as_str()? {
+            "reach" => return Some(hand),
+            "tsumo" => hand[index(&e["pai"])?] += 1,
+            "dahai" => {
+                let t = index(&e["pai"])?;
+                hand[t] = hand[t].checked_sub(1)?;
+            }
+            "kita" | "nukidora" => {
+                hand[30] = hand[30].checked_sub(1)?;
+            }
+            "pon" | "ankan" | "kakan" | "daiminkan" => {
+                for t in e["consumed"].as_array()? {
+                    let t = index(t)?;
+                    hand[t] = hand[t].checked_sub(1)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Tiles this seat has seen.
@@ -165,7 +315,9 @@ fn doras_owned_3p(state: &GameState3P, seat: u8, dora_indicators: &[u8]) -> [u8;
             }
         };
         if pid == seat as usize {
-            for &t in &player.hand { tally(t); }
+            for &t in &player.hand {
+                tally(t);
+            }
         }
         for m in &player.melds {
             for &t in &m.tiles {
@@ -218,11 +370,7 @@ impl MortalSeatView {
                 .as_ref()
                 .and_then(|f| f.get(pid as usize).cloned())
                 .unwrap_or_default();
-            v.kawa[r] = build_kawa(
-                &player.discards,
-                &tedashi,
-                &player.discard_is_riichi,
-            );
+            v.kawa[r] = build_kawa(&player.discards, &tedashi, &player.discard_is_riichi);
             // NOTE: `kawa_overview` holds *raw* tile ids (0..135), because
             // `encode_tile_set` de-akas its input. The 4-player builder stores
             // de-aka'd ids, matching its own reference; the sanma reference was
@@ -237,10 +385,15 @@ impl MortalSeatView {
             v.scores[r] = player.score;
             v.riichi_declared[r] = player.riichi_declared || player.riichi_stage;
             // Replay distinguishes the server acceptance event from declaration.
-            v.riichi_accepted[r] = state.mjai_log.iter().rev()
+            v.riichi_accepted[r] = state
+                .mjai_log
+                .iter()
+                .rev()
                 .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
                 .take_while(|event| event["type"] != "start_kyoku")
-                .any(|event| event["type"] == "reach_accepted" && event["actor"].as_u64() == Some(pid as u64));
+                .any(|event| {
+                    event["type"] == "reach_accepted" && event["actor"].as_u64() == Some(pid as u64)
+                });
 
             v.last_tedashis[r] = state.last_tedashis[pid as usize].map(|raw| KawaItem {
                 tile: mortal_obs_deaka(raw),
@@ -257,38 +410,61 @@ impl MortalSeatView {
             });
         }
 
-        // rank: how many seats are strictly ahead of us.
-        let my_score = state.players[seat as usize].score;
-        v.rank = state
-            .players
-            .iter()
-            .filter(|p| p.score > my_score)
-            .count()
-            .min(2);
+        // Akagi's 775-channel binary rotates a four-wide relative score array
+        // (including the dummy fourth seat), then ranks its first three slots.
+        // Preserve this trained input contract; this is not the game's UI rank.
+        let mut scores = v.scores;
+        scores.rotate_right(seat as usize);
+        let mut order = [0, 1, 2];
+        order.sort_by_key(|&i| (std::cmp::Reverse(scores[i]), i));
+        v.rank = order.iter().position(|&i| i == seat as usize).unwrap_or(0);
 
         v.dora_indicators = state.wall.dora_indicators.clone();
         v.doras_seen = v.dora_indicators.len().min(5) as u8;
 
         v.tiles_seen = tiles_seen_3p(state, seat, &v.dora_indicators);
         for &indicator in &v.dora_indicators {
-            let dora = crate::tiles::next_dora_tile34(mortal_obs_deaka(indicator) as u8, 3) as usize;
+            let dora =
+                crate::tiles::next_dora_tile34(mortal_obs_deaka(indicator) as u8, 3) as usize;
             v.dora_factor[dora] = v.dora_factor[dora].saturating_add(1);
         }
         let mut red_seen = [false; 3];
-        for &t in state.players[seat as usize].hand.iter()
+        for &t in state.players[seat as usize]
+            .hand
+            .iter()
             .chain(state.players.iter().flat_map(|p| p.discards.iter()))
-            .chain(state.players.iter().flat_map(|p| p.melds.iter().flat_map(|m| m.tiles.iter())))
-            .chain(v.dora_indicators.iter()) {
-            match t { 16 => red_seen[0] = true, 52 => red_seen[1] = true, 88 => red_seen[2] = true, _ => {} }
+            .chain(
+                state
+                    .players
+                    .iter()
+                    .flat_map(|p| p.melds.iter().flat_map(|m| m.tiles.iter())),
+            )
+            .chain(v.dora_indicators.iter())
+        {
+            match t {
+                16 => red_seen[0] = true,
+                52 => red_seen[1] = true,
+                88 => red_seen[2] = true,
+                _ => {}
+            }
         }
         let visible_reds = red_seen.iter().filter(|&&seen| seen).count();
-        v.doras_seen = v.tiles_seen.iter().zip(v.dora_factor.iter())
+        v.doras_seen = v
+            .tiles_seen
+            .iter()
+            .zip(v.dora_factor.iter())
             .map(|(&seen, &factor)| (seen as usize) * (factor as usize))
-            .sum::<usize>().saturating_add(visible_reds).min(u8::MAX as usize) as u8;
+            .sum::<usize>()
+            .saturating_add(visible_reds)
+            .min(u8::MAX as usize) as u8;
         let absolute_owned = doras_owned_3p(state, seat, &v.dora_indicators);
-        v.doras_owned = std::array::from_fn(|r| if r < NUM_PLAYERS_3P {
-            absolute_owned[(seat as usize + r) % NUM_PLAYERS_3P]
-        } else { 0 });
+        v.doras_owned = std::array::from_fn(|r| {
+            if r < NUM_PLAYERS_3P {
+                absolute_owned[(seat as usize + r) % NUM_PLAYERS_3P]
+            } else {
+                0
+            }
+        });
 
         // libriichi's `tiles_left` is the live wall, i.e. the tiles still
         // drawable excluding the 14-tile dead wall - exactly what
@@ -301,6 +477,7 @@ impl MortalSeatView {
         // excluded even though `tehai` (the encoded feature) includes it.
         v.shanten = shanten_from_hand_vec(&me.hand, state.drawn_tile);
 
+        restore_river_history(&mut v, state, seat);
         v
     }
 
@@ -324,7 +501,10 @@ impl MortalSeatView {
         // Nine-terminals abort is only available on our first uninterrupted draw.
         self.can_ryukyoku = has(ActionType::KyushuKyuhai)
             && state.players[seat as usize].discards.is_empty()
-            && state.players.iter().all(|p| p.melds.is_empty() && p.kita_tiles.is_empty());
+            && state
+                .players
+                .iter()
+                .all(|p| p.melds.is_empty() && p.kita_tiles.is_empty());
         self.can_pass = legal.len() > 1 && legal.iter().any(|a| a.action_type == ActionType::Pass);
 
         // Sanma has no chi, so the chi flags stay false.
@@ -353,17 +533,45 @@ impl MortalSeatView {
                 pre_draw[t] = pre_draw[t].saturating_sub(1);
             }
         }
-        let span = (pre_draw.iter().map(|&n| n as usize).sum::<usize>() / 3) as u8;
+        let span = (self.tehai.iter().map(|&n| n as usize).sum::<usize>() / 3) as u8;
+        if self.can_discard && state.drawn_tile.is_none() {
+            // Pon refreshes shanten but retains the waits from before the call.
+            if let Some(event) = state
+                .mjai_log
+                .iter()
+                .rev()
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .find(|e| e["actor"].as_u64() == Some(seat as u64) && e["type"] == "pon")
+            {
+                if let Some(tiles) = event["consumed"].as_array() {
+                    for t in tiles {
+                        if let Some(t) = t
+                            .as_str()
+                            .and_then(|s| s.parse::<mortal_sp::tile::Tile>().ok())
+                        {
+                            pre_draw[t.deaka().as_usize()] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let wait_span = (pre_draw.iter().map(|&n| n as usize).sum::<usize>() / 3) as u8;
         self.waits = [false; T];
         for t in 0..T {
-            if (1..=7).contains(&t) || pre_draw[t] >= 4 { continue; }
+            if (1..=7).contains(&t) || pre_draw[t] >= 4 {
+                continue;
+            }
             let mut probe = pre_draw;
             probe[t] += 1;
-            self.waits[t] = riichienv_core::shanten::calc_shanten_from_counts_3p(&probe, span) < 0;
+            self.waits[t] = mortal_sp::algo::shanten::calc_all(&probe, wait_span) < 0;
         }
         let me = &state.players[seat as usize];
-        self.at_furiten = me.discards.iter().any(|&raw| self.waits[mortal_obs_deaka(raw)])
-            || me.missed_agari_doujun || me.missed_agari_riichi;
+        self.at_furiten = me
+            .discards
+            .iter()
+            .any(|&raw| self.waits[mortal_obs_deaka(raw)])
+            || me.missed_agari_doujun
+            || me.missed_agari_riichi;
 
         // -- discard quality flags -----------------------------------------
         // Verbatim from libriichi `PlayerState::update_shanten_discards`; see
@@ -371,22 +579,32 @@ impl MortalSeatView {
         // "keep" holds it, a worsening discard is in neither set.
         if self.can_discard {
             let base = self.shanten;
-            let mut seen: Vec<u8> = Vec::new();
-            for &raw in &self.discard_candidates {
-                let tid = mortal_obs_deaka(raw);
-                if seen.contains(&(tid as u8)) || self.tehai[tid] == 0 {
+            let quality_hand = if self.riichi_accepted[0] {
+                declaration_hand(state, seat).unwrap_or(self.tehai)
+            } else {
+                self.tehai
+            };
+            for tid in 0..T {
+                if quality_hand[tid] == 0 {
                     continue;
                 }
-                seen.push(tid as u8);
-                let mut after = self.tehai;
+                let raw = tid as u8 * 4;
+                let mut after = quality_hand;
                 after[tid] -= 1;
-                let s_after = crate::state_features::shanten_same_span_3p(&after);
+                let s_after = mortal_sp::algo::shanten::calc_all(&after, span);
                 if s_after < base as i8 {
                     self.next_shanten_discards.push(raw);
                 } else if s_after == base as i8 {
                     self.keep_shanten_discards.push(raw);
                 }
-                if s_after == 0 && crate::state_features::has_any_wait_for(&after) {
+            }
+            for &raw in &self.discard_candidates {
+                let tid = mortal_obs_deaka(raw);
+                let mut after = self.tehai;
+                after[tid] = after[tid].saturating_sub(1);
+                if mortal_sp::algo::shanten::calc_all(&after, span) == 0
+                    && crate::sanma_sp::unconditional_tenpai(&self, state, seat, &after, tid)
+                {
                     self.unconditional_tenpai_discards.push(raw);
                 }
             }
@@ -405,6 +623,7 @@ impl MortalSeatView {
             });
         }
 
+        crate::sanma_sp::populate(&mut self, state, seat);
         self
     }
 }

@@ -89,7 +89,12 @@ jobs:
         working-directory: external/Akagi/native_bot
         run: cargo test --release --locked --target-dir ../../../hook-probe/build/rust --lib --test mortal_feature_regressions --test mortal_ranking_regressions --test mortal_state_obs --test mortal_sanma_reference --test shanten_len_div3
 
+      - name: Test native sanma SP algorithms
+        working-directory: external/mortal-sp
+        run: cargo test --release --locked --target-dir ../../hook-probe/build/rust --lib
+
       - name: Build Rust engines and native bridges for all ABIs
+        # Native SP tests and complete sanma vectors run before packaging.
         shell: pwsh
         run: ./hook-probe/build-native.ps1 -NdkPath "$env:ANDROID_HOME/ndk/27.2.12479018" -Abis all
 

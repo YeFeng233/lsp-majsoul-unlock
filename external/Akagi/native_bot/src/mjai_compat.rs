@@ -23,13 +23,39 @@ use riichienv_core::replay::MjaiEvent;
 /// Preserve the replay events that the sanma dependency's ingestion method
 /// does not log itself. Mortal needs discard provenance and reach acceptance.
 pub fn apply_sanma_event(state: &mut riichienv_core::state_3p::GameState3P, event: MjaiEvent) {
-    if matches!(event, MjaiEvent::StartGame { .. } | MjaiEvent::StartKyoku { .. }) {
+    if matches!(
+        event,
+        MjaiEvent::StartGame { .. } | MjaiEvent::StartKyoku { .. }
+    ) {
         state.mjai_log.clear();
     }
     let line = serde_json::to_string(&event).expect("serializable mjai event");
+    // The replay dependency cannot extract North from an opponent's unknown
+    // hand ("?" is represented by raw 0). Supply only the tile revealed by
+    // this public event, so it records the kita and exposes the ron window.
+    if let MjaiEvent::Kita { actor } = &event {
+        let actor = *actor;
+        let hidden = state
+            .mjai_log
+            .iter()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .any(|e| {
+                e["type"] == "start_kyoku"
+                    && e["tehais"][actor]
+                        .as_array()
+                        .is_some_and(|h| h.iter().any(|t| t == "?"))
+            });
+        if hidden && !state.players[actor].hand.iter().any(|&t| t / 4 == 30) {
+            if let Some(t) = state.players[actor].hand.iter_mut().find(|t| **t == 0) {
+                *t = 120;
+            }
+        }
+    }
     let before = state.mjai_log.len();
     state.apply_mjai_event(event);
-    if state.mjai_log.len() == before { state.mjai_log.push(line); }
+    if state.mjai_log.len() == before {
+        state.mjai_log.push(line);
+    }
 }
 
 /// Tenhou sanma logs spell nukidora `nukidora`; riichienv's `MjaiEvent` only

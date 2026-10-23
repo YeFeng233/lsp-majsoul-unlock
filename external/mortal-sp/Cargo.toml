@@ -1,0 +1,21 @@
+[package]
+name = "mortal-sp"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Selected native Mortal single-player, shanten and scoring algorithms; no Python runtime."
+
+[features]
+default = []
+sp_reproduce_cpp_ver = []
+
+[dependencies]
+anyhow = "1"
+ahash = "0.8"
+byteorder = "1"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+tinyvec = { version = "1", features = ["alloc", "serde", "rustc_1_57"] }
+
+[workspace]

@@ -9,14 +9,29 @@ import org.json.JSONObject
 class AutoDiscardInstrumentation : Instrumentation() {
     private var controllerOnly = false
     private var importFile: String? = null
+    private var verifySelectedModels = false
     override fun onCreate(arguments: Bundle?) {
         controllerOnly = arguments?.getString("controllerOnly") == "true"
         importFile = arguments?.getString("importFile")
+        verifySelectedModels = arguments?.getString("verifySelectedModels") == "true"
         super.onCreate(arguments); start()
     }
     override fun onStart() {
         val output = Bundle()
         runCatching {
+            if (verifySelectedModels) {
+                val before = targetContext.getSharedPreferences("onnx-policy-models", 0).all.toMap()
+                val unattended = targetContext.getSharedPreferences("unattended", 0).all.toMap()
+                OnnxModelStore.initialize(targetContext)
+                val results = listOf(3,4).filter { OnnxModelStore.selectedCustom(targetContext,it) }
+                    .map { OnnxModelStore.selfTest(targetContext,it) }
+                check(results.isNotEmpty()) { "No selected custom models to verify" }
+                check(before == targetContext.getSharedPreferences("onnx-policy-models", 0).all)
+                check(unattended == targetContext.getSharedPreferences("unattended", 0).all)
+                output.putString("stream", results.joinToString("\n", "PASS selected models; preferences unchanged\n", "\n"))
+                finish(-1,output)
+                return
+            }
             importFile?.let { path ->
                 val file = java.io.File(path).canonicalFile
                 check(file.parentFile == targetContext.cacheDir.canonicalFile) { "Use a model in the target app cache" }
