@@ -102,7 +102,11 @@ internal object CatalogUpdates {
                     .putLong("checkedAt", System.currentTimeMillis()).apply()
                 val repo = UnlockCatalogStore.repo(app)
                 publish(app, repo.current(), true, "正在检查仓库解锁清单…")
-                val changed = repo.update { name, limit -> GitHubConnection.requestJson(app, UnlockCatalogStore.baseUrl() + name, limit = limit) }
+                val changed = repo.update { name, limit ->
+                    // Raw GitHub and accelerators can cache an old manifest for several minutes.
+                    val path = if (name == "manifest.json") "$name?check=${System.currentTimeMillis()}" else name
+                    GitHubConnection.requestJson(app, UnlockCatalogStore.baseUrl() + path, limit = limit)
+                }
                 app.getSharedPreferences("unlock-catalog", Context.MODE_PRIVATE).edit()
                     .putLong("checkedAt", System.currentTimeMillis()).apply()
                 publish(app, repo.current(), false, if (changed) "解锁清单已更新，完全重启游戏后生效" else "已检查，当前清单无需更新")

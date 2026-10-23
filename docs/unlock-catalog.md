@@ -11,7 +11,7 @@
 编辑 `external/MajsoulMax-rs/liqi_config/max_data.yaml` 中的已确认 ID，再从仓库根目录执行：
 
 ```powershell
-python tools/update_unlock_catalog.py --version 2 --name 2026.10.24.1 --date 2026-10-24
+python tools/update_unlock_catalog.py --version 3 --name 2026.10.24.1 --date 2026-10-24
 python tools/update_unlock_catalog.py --check
 ```
 
